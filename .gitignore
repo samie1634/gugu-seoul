@@ -1,0 +1,14 @@
+node_modules/
+dist/
+.pnpm-store/
+.cache/
+qa-local/
+*.local
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+.DS_Store
+Thumbs.db
+*.log

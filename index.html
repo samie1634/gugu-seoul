@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#d4dfd5" />
+    <meta name="description" content="비둘기가 되어 서울 종로와 광화문을 걷고 날아보세요. 직접 만든 3D 서울 산책 놀이터, 구구 서울." />
+    <title>구구 서울 · Gugu Seoul</title>
+    <link rel="icon" type="image/svg+xml" href="./pigeon.svg" />
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <main id="world" aria-label="서울 종로와 광화문 3D 비둘기 놀이터"></main>
+    <div class="screen-grain" aria-hidden="true"></div>
+    <header class="topbar">
+      <div class="wordmark"><img src="./pigeon.svg" width="34" height="34" alt="" /><span>GUGU <b>SEOUL</b></span></div>
+      <div class="location game-ui"><span class="location-dot"></span><span id="location-name">광화문광장</span></div>
+      <nav class="tools" aria-label="게임 설정">
+        <button id="sound-button" class="icon-button" aria-label="소리 끄기" title="소리 끄기" aria-pressed="false">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 5 6 9H3v6h3l5 4zM15 8c3 2 3 6 0 8M18 5c5 4 5 10 0 14"/></svg>
+          <span class="mute-slash" aria-hidden="true"></span>
+        </button>
+        <button id="view-button" class="icon-button game-ui" aria-label="비둘기 눈높이로 전환" title="시점 전환 · V">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 8h4l2-3h6l2 3h4v12H3z"/><circle cx="12" cy="13" r="3.5"/></svg>
+        </button>
+        <button id="looks-button" class="pill-button game-ui" aria-label="새 모습 고르기"><span aria-hidden="true">✦</span> 모습 <i id="unlocked-dot" hidden></i></button>
+        <button id="help-button" class="icon-button game-ui" aria-label="조작 안내와 일시정지" title="조작 안내 · Esc"><span class="question-mark">?</span></button>
+      </nav>
+    </header>
+
+    <section id="intro" class="intro" aria-label="게임 시작">
+      <p class="eyebrow"><span></span> 서울, 종로에서</p>
+      <h1>구구,<br />서울.</h1>
+      <p class="intro-copy">발밑엔 광장. 날개 너머엔 서울.<br />오늘은 비둘기가 되어 돌아다녀요.</p>
+      <div class="intro-controls desktop-copy"><span><kbd>W A S D</kbd> 걷기 · 방향</span><span><kbd>SPACE</kbd> 톡 펄럭, 꾹 활공</span></div>
+      <div class="intro-controls touch-copy"><span>왼쪽 패드로 걷기 · 방향</span><span>펄럭을 톡 누르면 날갯짓, 꾹 누르면 활공</span></div>
+      <button id="start-button" class="primary-button">광장에 내려앉기 <span aria-hidden="true">↗</span></button>
+      <p class="intro-note">3분, 8분 산책 후 새로운 새 모습이 열려요.</p>
+    </section>
+
+    <aside class="minimap game-ui" aria-label="종로와 광화문 미니맵">
+      <div class="map-top"><span>JONGNO</span><span>N ↑</span></div>
+      <svg id="map" viewBox="0 0 180 186" role="img" aria-label="북쪽 광화문, 남북 세종대로, 동쪽 종로, 남쪽 청계천">
+        <rect width="180" height="186" rx="11" fill="#d6ddca"/>
+        <path d="M20 25H164M94 25V181M10 131H177M30 30V180M122 30V181M149 30V181" fill="none" stroke="#b1bfac" stroke-width="4"/>
+        <path d="M94 25V181M10 131H177" fill="none" stroke="#829a8a" stroke-width="6"/>
+        <path d="M98 162h79" fill="none" stroke="#7baaa1" stroke-width="4"/>
+        <rect x="76" y="31" width="13" height="94" rx="1" fill="#f0e9ce"/>
+        <rect x="40" y="64" width="30" height="26" rx="2" fill="#b8ba9f"/>
+        <rect x="101" y="104" width="16" height="21" rx="2" fill="#b8ba9f"/>
+        <path d="M73 27h21l-2-5H75z" fill="#4f7661"/>
+        <rect x="158" y="140" width="9" height="7" fill="#8c9c76"/>
+        <circle cx="82.5" cy="68" r="2" fill="#b49a5d"/><circle cx="82.5" cy="115" r="2" fill="#698878"/>
+        <g class="map-labels"><text x="83" y="17" text-anchor="middle">광화문</text><text x="108" y="79">세종대로</text><text x="138" y="126">종로</text><text x="118" y="177">청계천</text></g>
+        <g id="map-player"><circle r="6" fill="#faf5df" opacity=".9"/><path d="M0-5 3.5 4 0 2.5-3.5 4z" fill="#c0744f"/></g>
+      </svg>
+    </aside>
+
+    <section class="flight-panel game-ui" aria-label="현재 비행 정보">
+      <span id="mode-dot" class="mode-dot"></span>
+      <div><output id="flight-state" aria-label="현재 동작">잠깐 쉬는 중</output><div id="next-look">다음 모습까지 03:00</div></div>
+      <div class="height"><output id="altitude" aria-label="높이">0.0</output><span>m</span></div>
+    </section>
+    <div id="coo-bubble" class="coo-bubble" role="status" hidden>구구구</div>
+    <div id="toast" class="toast" role="status" hidden></div>
+    <footer class="keyboard-hint game-ui"><span><kbd>W S</kbd> 이동</span><span><kbd>A D</kbd> 방향</span><span><kbd>SPACE</kbd> 톡 펄럭 · 꾹 활공</span><span><kbd>SHIFT</kbd> 내려가기</span><span><kbd>C</kbd> 구구</span><span><kbd>V</kbd> 시점</span></footer>
+
+    <div id="touch-controls" class="touch-controls game-ui" aria-label="터치 조작">
+      <div id="joystick" class="joystick" role="group" aria-label="이동과 방향 터치 패드"><span class="stick-cross" aria-hidden="true">＋</span><span class="stick-thumb" aria-hidden="true"></span><span class="stick-label">이동 · 방향</span></div>
+      <button id="touch-coo" class="touch-coo" aria-label="구구 울기">구구</button>
+      <button id="touch-descend" class="touch-descend" aria-label="아래로 내려가기">↓ 내려가기</button>
+      <button id="touch-flap" class="touch-flap" aria-label="날갯짓, 길게 누르면 활공"><svg viewBox="0 0 40 24" aria-hidden="true"><path d="M20 20C11 18 5 10 2 3c9 0 15 5 18 11C23 8 29 3 38 3c-3 7-9 15-18 17Z"/></svg><strong>펄럭</strong><small>꾹 눌러 활공</small></button>
+    </div>
+
+    <dialog id="looks-dialog" class="game-dialog" aria-labelledby="looks-title">
+      <div class="dialog-top"><p class="eyebrow">나의 날개</p><button class="close-dialog icon-button" aria-label="모습 선택 닫기">×</button></div>
+      <h2 id="looks-title">오늘은 어떤 새?</h2><p class="dialog-copy">서울에 머문 만큼, 새로운 모습으로.</p>
+      <div id="look-cards" class="look-cards"></div>
+      <p class="playtime-note">함께한 시간 <output id="playtime">00:00</output><br /><span>플레이 중인 탭의 시간만 쌓이고, 이 브라우저에 저장돼요.</span></p>
+    </dialog>
+
+    <dialog id="help-dialog" class="game-dialog help-dialog" aria-labelledby="help-title">
+      <div class="dialog-top"><p class="eyebrow">잠깐 날개 쉬기</p><button class="close-dialog icon-button" aria-label="조작 안내 닫기">×</button></div>
+      <h2 id="help-title">서울을 나는 법</h2>
+      <dl class="control-list"><div><dt>걷기 · 비행 방향</dt><dd><kbd>W S</kbd> 앞뒤 <kbd>A D</kbd> 회전</dd></div><div><dt>날갯짓으로 상승</dt><dd><kbd>SPACE</kbd> 짧게 톡톡</dd></div><div><dt>날개 펴고 활공</dt><dd><kbd>SPACE</kbd> 길게 꾹</dd></div><div><dt>하강 · 착륙</dt><dd><kbd>SHIFT</kbd> 또는 날개 놓기</dd></div><div><dt>구구 · 눈높이 시점</dt><dd><kbd>C</kbd> 울기 <kbd>V</kbd> 시점</dd></div></dl>
+      <p class="touch-help">터치에서는 왼쪽 패드로 이동하고, 오른쪽 펄럭을 톡 누르거나 꾹 눌러요. 아래로 내려가 바닥과 지붕에 내려앉을 수 있어요.</p>
+      <p class="pause-note">이 화면에서는 산책 시간이 멈춰요.</p>
+      <button id="resume-button" class="primary-button">다시 돌아다니기 <span aria-hidden="true">↗</span></button>
+      <div class="reset-actions"><button id="home-button" class="text-button">광장으로 돌아가기</button><button id="reset-button" class="text-button">플레이 기록 초기화</button></div>
+      <div id="reset-confirm" class="reset-confirm" hidden><p>산책 시간과 선택한 모습을 처음으로 돌릴까요?</p><button id="confirm-reset" class="text-button">초기화하기</button><button id="cancel-reset" class="text-button">취소</button></div>
+    </dialog>
+
+    <section id="fatal-error" class="error-card" role="alert" hidden><h2>3D 화면을 열지 못했어요.</h2><p>WebGL 2를 지원하는 최신 브라우저에서 다시 열어주세요.</p><button id="retry-button" class="primary-button">다시 열기</button></section>
+    <noscript>구구 서울은 JavaScript가 켜진 브라우저에서 실행됩니다.</noscript>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

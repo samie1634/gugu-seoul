@@ -1,0 +1,31 @@
+{
+  "name": "gugu-seoul",
+  "version": "1.0.0",
+  "private": true,
+  "description": "A small, handcrafted 3D pigeon playground around Jongno and Gwanghwamun, Seoul.",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "packageManager": "pnpm@11.25.0",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview --host 127.0.0.1",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src tests",
+    "test": "node --test tests/*.test.mjs",
+    "audit:public": "node tools/audit-public.mjs"
+  },
+  "dependencies": {
+    "three": "0.187.0"
+  },
+  "devDependencies": {
+    "@types/three": "0.187.0",
+    "eslint": "10.14.0",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.72.1",
+    "vite": "8.3.6"
+  }
+}
