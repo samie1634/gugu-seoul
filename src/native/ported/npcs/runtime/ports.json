@@ -1,0 +1,165 @@
+{
+  "schemaVersion": 1,
+  "scope": "Pinned NPC v1 source modules and import mappings for this local code snapshot. Landscape browser review and final application acceptance remain incomplete.",
+  "ports": [
+    {
+      "source": "workstreams/npcs/src/contracts.ts",
+      "destination": "src/native/ported/npcs/src/contracts.ts",
+      "sourceSha256": "26bd2a80d7c58375e708061d0877141d2f7b5cf51d562506d2609c93736f5354",
+      "portSha256": "26bd2a80d7c58375e708061d0877141d2f7b5cf51d562506d2609c93736f5354",
+      "changes": [],
+      "reused": true
+    },
+    {
+      "source": "workstreams/npcs/src/profiles.ts",
+      "destination": "src/native/ported/npcs/src/profiles.ts",
+      "sourceSha256": "a02171480a02db3d206cbd44d129d99fa03858abb48cacd35b8a9aa8cf32ff6d",
+      "portSha256": "a02171480a02db3d206cbd44d129d99fa03858abb48cacd35b8a9aa8cf32ff6d",
+      "changes": [
+        {
+          "from": "./contracts.ts",
+          "to": "./contracts.ts"
+        }
+      ],
+      "reused": true
+    },
+    {
+      "source": "workstreams/npcs/src/simulation.ts",
+      "destination": "src/native/ported/npcs/runtime/simulation.ts",
+      "sourceSha256": "77811ea5e0678aaf8e7879b720239ba3e9c0f785623ffef92b6aaa95e7750bbd",
+      "portSha256": "7c698725ead0f6f9d450137539c41556ea789a8c0a86773fe1e560a7cf063186",
+      "changes": [
+        {
+          "from": "./contracts.ts",
+          "to": "../src/contracts.ts"
+        },
+        {
+          "from": "./profiles.ts",
+          "to": "../src/profiles.ts"
+        }
+      ],
+      "reused": false
+    },
+    {
+      "source": "workstreams/npcs/src/legacy-adapter.ts",
+      "destination": "src/native/ported/npcs/runtime/legacy-adapter.ts",
+      "sourceSha256": "c3ee7079c445e83cf3176f6b96845dd5d154ad0d45388c2378af904e9429feea",
+      "portSha256": "c915d289b36cc1f59c201fff6dd0307b64a16ddadb513cc6e2a75660f0fddf6c",
+      "changes": [
+        {
+          "from": "./contracts.ts",
+          "to": "../src/contracts.ts"
+        },
+        {
+          "from": "./profiles.ts",
+          "to": "../src/profiles.ts"
+        }
+      ],
+      "reused": false
+    },
+    {
+      "source": "workstreams/npcs/src/map-adapter.ts",
+      "destination": "src/native/ported/npcs/runtime/map-adapter.ts",
+      "sourceSha256": "c1246846e106efa3002a0227150e805734752a7c0bbf7dbd722b04403deae0f3",
+      "portSha256": "3c2f140a19698bcf0e52d96de4235a0a81a3a66c29788b8475af5d3cb9fb28c6",
+      "changes": [
+        {
+          "from": "../../map/contracts.ts",
+          "to": "../../map/contracts.ts"
+        },
+        {
+          "from": "../../map/contracts.ts",
+          "to": "../../map/contracts.ts"
+        },
+        {
+          "from": "../../map/layout.ts",
+          "to": "../../map/layout.ts"
+        },
+        {
+          "from": "../../../src/simulation.ts",
+          "to": "../../../../simulation.ts"
+        },
+        {
+          "from": "./contracts.ts",
+          "to": "../src/contracts.ts"
+        },
+        {
+          "from": "./legacy-adapter.ts",
+          "to": "./legacy-adapter.ts"
+        },
+        {
+          "from": "./profiles.ts",
+          "to": "../src/profiles.ts"
+        }
+      ],
+      "reused": false
+    },
+    {
+      "source": "workstreams/npcs/src/index.ts",
+      "destination": "src/native/ported/npcs/runtime/index.ts",
+      "sourceSha256": "c329a8dcfbb763b79e0153da78fab8cdbe7c77f73820d2635ecbc8e592de28de",
+      "portSha256": "b60346227d5378837b25a7ce4dd35e26afd839d48c55b2da54da03308bb6a8ae",
+      "changes": [
+        {
+          "from": "./contracts.ts",
+          "to": "../src/contracts.ts"
+        },
+        {
+          "from": "./profiles.ts",
+          "to": "../src/profiles.ts"
+        },
+        {
+          "from": "./simulation.ts",
+          "to": "./simulation.ts"
+        },
+        {
+          "from": "./legacy-adapter.ts",
+          "to": "./legacy-adapter.ts"
+        },
+        {
+          "from": "./map-adapter.ts",
+          "to": "./map-adapter.ts"
+        }
+      ],
+      "reused": false
+    },
+    {
+      "source": "workstreams/npcs/models/index.ts",
+      "destination": "src/native/ported/npcs/models/index.ts",
+      "sourceSha256": "8978916b18581e1c89df375d2a07eacd0c76491e4d14c84779d9b33ca82bd1bc",
+      "portSha256": "8978916b18581e1c89df375d2a07eacd0c76491e4d14c84779d9b33ca82bd1bc",
+      "changes": [
+        {
+          "from": "../src/contracts.ts",
+          "to": "../src/contracts.ts"
+        },
+        {
+          "from": "../src/profiles.ts",
+          "to": "../src/profiles.ts"
+        },
+        {
+          "from": "./pose.ts",
+          "to": "./pose.ts"
+        }
+      ],
+      "reused": true
+    },
+    {
+      "source": "workstreams/npcs/models/pose.ts",
+      "destination": "src/native/ported/npcs/models/pose.ts",
+      "sourceSha256": "dba543e36148d2b4f708d9b17547fc53ac80065d1b5aa59835703a3f8396d531",
+      "portSha256": "dba543e36148d2b4f708d9b17547fc53ac80065d1b5aa59835703a3f8396d531",
+      "changes": [
+        {
+          "from": "../src/contracts.ts",
+          "to": "../src/contracts.ts"
+        },
+        {
+          "from": "../src/profiles.ts",
+          "to": "../src/profiles.ts"
+        }
+      ],
+      "reused": true
+    }
+  ]
+}

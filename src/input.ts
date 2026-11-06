@@ -1,90 +1,125 @@
-import { emptyInput, type FlightInput } from './simulation.ts';
+import type { FlightInput } from './simulation.ts';
+import { createInputState, reduceInput, sampleInput, type InputEvent, type InputUpdate, type StickAxes, type TouchControl } from './input-reducer.ts';
+import { INACTIVE_PLAY_GATE, setFrameClockGate, stepFrameClock, type FrameClock, type FrameStep, type PlayGate } from './frame-clock.ts';
 
+export interface InputPreview {
+  readonly input: Readonly<FlightInput>;
+  isCurrent(): boolean;
+  commit(): boolean;
+}
+
+/** DOM ownership and capture only; the application supplies the lifecycle gate. */
 export class Controls {
-  private keys = new Set<string>();
-  private flapQueued = false;
-  private touchFlap = false;
-  private touchDescend = false;
-  private joystickPointer: number | null = null;
-  private capturedPointers = new Map<number, HTMLElement>();
-  private stick = { x: 0, y: 0 };
-  enabled = false;
+  private state = createInputState({
+    ...INACTIVE_PLAY_GATE,
+    focused: typeof document.hasFocus === 'function' ? document.hasFocus() : true,
+    hidden: document.hidden === true,
+  });
+  private capturedPointers = new Map<number, { element: HTMLElement; control: TouchControl }>();
+  private readonly thumb: HTMLElement;
   onCoo = () => {};
   onView = () => {};
   onPause = () => {};
 
   constructor(joystick: HTMLElement, flap: HTMLElement, descend: HTMLElement) {
-    window.addEventListener('keydown', e => {
-      if (e.code === 'Escape') { e.preventDefault(); if (!e.repeat) this.onPause(); return; }
-      if (!this.enabled || (e.target instanceof Element && e.target.closest('dialog'))) return;
-      if (e.repeat && !this.keys.has(e.code)) return;
-      if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) e.preventDefault();
-      if (e.code === 'Space' && !e.repeat && !this.keys.has(e.code)) this.flapQueued = true;
-      if (!e.repeat && e.code === 'KeyC') this.onCoo();
-      if (!e.repeat && e.code === 'KeyV') this.onView();
-      this.keys.add(e.code);
-    });
-    window.addEventListener('keyup', e => this.keys.delete(e.code));
+    this.thumb = joystick.querySelector<HTMLElement>('.stick-thumb')!;
+    window.addEventListener('keydown', event => this.send({
+      type: 'key-down', code: event.code, repeat: event.repeat,
+      fromDialog: event.target instanceof Element && !!event.target.closest('dialog'),
+    }, event));
+    window.addEventListener('keyup', event => this.send({ type: 'key-up', code: event.code }));
+    // Standalone adapters stay neutral too; main also updates the clock gate.
     window.addEventListener('blur', () => this.reset());
     document.addEventListener('visibilitychange', () => this.reset());
-    const bindHold = (element: HTMLElement, start: () => void, end: () => void) => {
-      element.addEventListener('pointerdown', e => {
-        if (!this.enabled) return;
-        e.preventDefault(); element.setPointerCapture(e.pointerId); this.capturedPointers.set(e.pointerId, element); start();
+    const bind = (element: HTMLElement, control: TouchControl) => {
+      element.addEventListener('pointerdown', event => {
+        const existed = this.state.pointers.some(owner => owner.id === event.pointerId);
+        this.send(control === 'stick'
+          ? { type: 'pointer-down', id: event.pointerId, control, axes: this.axes(joystick, event) }
+          : { type: 'pointer-down', id: event.pointerId, control }, event);
+        if (existed || !this.state.pointers.some(owner => owner.id === event.pointerId && owner.control === control)) return;
+        this.capturedPointers.set(event.pointerId, { element, control });
+        try { element.setPointerCapture(event.pointerId); }
+        catch { this.send({ type: 'pointer-cancel', id: event.pointerId, control }); }
       });
-      const stop = (e: PointerEvent) => { this.capturedPointers.delete(e.pointerId); end(); };
-      element.addEventListener('pointerup', stop);
-      element.addEventListener('pointercancel', stop);
-      element.addEventListener('lostpointercapture', stop);
+      for (const type of ['pointerup', 'pointercancel', 'lostpointercapture'] as const) {
+        element.addEventListener(type, event => this.send({
+          type: type === 'pointerup' ? 'pointer-up' : type === 'pointercancel' ? 'pointer-cancel' : 'lost-pointer-capture',
+          id: event.pointerId, control,
+        }));
+      }
     };
-    bindHold(flap, () => { this.touchFlap = true; this.flapQueued = true; }, () => { this.touchFlap = false; });
-    bindHold(descend, () => { this.touchDescend = true; }, () => { this.touchDescend = false; });
-    const thumb = joystick.querySelector<HTMLElement>('.stick-thumb')!;
-    const updateStick = (e: PointerEvent) => {
-      const r = joystick.getBoundingClientRect();
-      let x = (e.clientX - r.left - r.width / 2) / (r.width * 0.34);
-      let y = (e.clientY - r.top - r.height / 2) / (r.height * 0.34);
-      const length = Math.max(1, Math.hypot(x, y)); x /= length; y /= length;
-      this.stick = { x, y };
-      thumb.style.transform = `translate(${x * 33}px, ${y * 33}px)`;
-    };
-    joystick.addEventListener('pointerdown', e => {
-      if (!this.enabled || this.joystickPointer !== null) return;
-      e.preventDefault(); this.joystickPointer = e.pointerId; joystick.setPointerCapture(e.pointerId);
-      this.capturedPointers.set(e.pointerId, joystick); updateStick(e);
-    });
-    joystick.addEventListener('pointermove', e => { if (e.pointerId === this.joystickPointer) updateStick(e); });
-    const releaseStick = (e: PointerEvent) => {
-      if (e.pointerId !== this.joystickPointer) return;
-      this.joystickPointer = null; this.capturedPointers.delete(e.pointerId); this.stick = { x: 0, y: 0 }; thumb.style.transform = '';
-    };
-    joystick.addEventListener('pointerup', releaseStick);
-    joystick.addEventListener('pointercancel', releaseStick);
-    joystick.addEventListener('lostpointercapture', releaseStick);
+    bind(joystick, 'stick'); bind(flap, 'flap'); bind(descend, 'descend');
+    joystick.addEventListener('pointermove', event => this.send({
+      type: 'pointer-move', id: event.pointerId, axes: this.axes(joystick, event),
+    }, event));
   }
+
+  get enabled(): boolean { return this.state.gate.enabled; }
+  set enabled(enabled: boolean) { this.setGate({ ...this.state.gate, enabled }); }
+
+  setGate(gate: PlayGate): void { this.send({ type: 'gate', gate }); }
 
   sample(): FlightInput {
-    if (!this.enabled) return emptyInput();
-    const key = (...codes: string[]) => codes.some(c => this.keys.has(c)) ? 1 : 0;
-    const input = {
-      forward: Math.max(-1, Math.min(1, key('KeyW', 'ArrowUp') - key('KeyS', 'ArrowDown') - this.stick.y)),
-      turn: Math.max(-1, Math.min(1, key('KeyD', 'ArrowRight') - key('KeyA', 'ArrowLeft') + this.stick.x)),
-      flapPressed: this.flapQueued,
-      flapHeld: this.touchFlap || this.keys.has('Space'),
-      descend: this.touchDescend || !!key('ShiftLeft', 'ShiftRight'),
-    };
-    this.flapQueued = false;
-    return input;
+    const sample = sampleInput(this.state); this.state = sample.state; return sample.input;
   }
 
-  reset(): void {
-    this.keys.clear(); this.flapQueued = false; this.touchFlap = false;
-    this.touchDescend = false; this.stick = { x: 0, y: 0 };
-    this.joystickPointer = null;
-    for (const [id, element] of this.capturedPointers) {
-      if (element.hasPointerCapture(id)) element.releasePointerCapture(id);
-    }
-    this.capturedPointers.clear();
-    document.querySelector<HTMLElement>('.stick-thumb')?.style.removeProperty('transform');
+  /** Native frames consume the edge only after all spatial queries succeed. */
+  preview(): InputPreview {
+    const before = this.state;
+    const sample = sampleInput(before);
+    let consumed = false;
+    const isCurrent = () => !consumed && this.state === before;
+    return {
+      input: Object.freeze(sample.input), isCurrent,
+      commit: () => {
+        if (!isCurrent()) return false;
+        consumed = true; this.state = sample.state; return true;
+      },
+    };
   }
+
+  reset(): void { this.send({ type: 'reset' }); }
+
+  private axes(joystick: HTMLElement, event: PointerEvent): StickAxes {
+    const rect = joystick.getBoundingClientRect();
+    return [(event.clientX - rect.left - rect.width / 2) / (rect.width * 0.34),
+      (event.clientY - rect.top - rect.height / 2) / (rect.height * 0.34)];
+  }
+
+  private send(event: InputEvent, domEvent?: Event): InputUpdate {
+    const result = reduceInput(this.state, event);
+    // A command may synchronously open a modal and replace this state again.
+    this.state = result.state;
+    if (result.preventDefault) domEvent?.preventDefault();
+    this.syncPointers();
+    if (result.command === 'coo') this.onCoo();
+    else if (result.command === 'view') this.onView();
+    else if (result.command === 'pause') this.onPause();
+    return result;
+  }
+
+  private syncPointers(): void {
+    for (const [id, capture] of this.capturedPointers) {
+      if (this.state.pointers.some(owner => owner.id === id && owner.control === capture.control)) continue;
+      this.capturedPointers.delete(id);
+      try { if (capture.element.hasPointerCapture(id)) capture.element.releasePointerCapture(id); }
+      catch { /* The browser may already have cancelled this pointer. */ }
+    }
+    const [x, y] = this.state.stick;
+    if (x === 0 && y === 0) this.thumb.style.removeProperty('transform');
+    else this.thumb.style.transform = 'translate(' + x * 33 + 'px, ' + y * 33 + 'px)';
+  }
+}
+
+/** Apply one lifecycle transition to input and its timestamp chain together. */
+export function applyControlsGate(controls: Pick<Controls, 'setGate'>, clock: FrameClock, gate: PlayGate): FrameClock {
+  controls.setGate(gate);
+  return setFrameClockGate(clock, gate);
+}
+
+/** Preserve a fresh queued tap until a frame accepts positive simulation time. */
+export function sampleControlsFrame(controls: Pick<Controls, 'sample'>, clock: FrameClock, timestampMs: number): FrameStep & { input: FlightInput | null } {
+  const frame = stepFrameClock(clock, timestampMs);
+  return { ...frame, input: frame.acceptedSeconds > 0 ? controls.sample() : null };
 }

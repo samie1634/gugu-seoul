@@ -1,7 +1,6 @@
-import { defineConfig } from 'vite';
 import { readFileSync } from 'node:fs';
 
-export default defineConfig({
+export default {
   base: './',
   server: { strictPort: true },
   preview: { strictPort: true },
@@ -13,4 +12,4 @@ export default defineConfig({
       }
     },
   }],
-});
+};

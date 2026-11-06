@@ -1,0 +1,79 @@
+{
+  "state": {
+    "x": 18.110693580773994,
+    "y": 3.7125000014007092,
+    "z": -432,
+    "heading": 1.5707963267948966,
+    "vx": 0.8459069542618952,
+    "vy": 0,
+    "vz": -5.1796862195665804e-17,
+    "grounded": true,
+    "mode": "walk",
+    "heldSeconds": 0,
+    "flapAge": 12.135499999999814,
+    "steps": 1.0352576453771616,
+    "flaps": 0,
+    "body": {
+      "horizontalRadiusM": 0.173,
+      "heightM": 0.22500000280141833,
+      "centreToSoleM": 0.11250000140070916,
+      "footSupportRadiusM": 0.05759448985242379,
+      "eyeFromSoleM": {
+        "x": 0.025639130729116527,
+        "y": 0.19805733357179384,
+        "z": -0.108
+      }
+    },
+    "tuning": {
+      "walkSpeed": 0.9,
+      "flightSpeed": 12,
+      "glideSpeed": 15
+    },
+    "sourceId": "player-bird",
+    "time": 2.135499999999998,
+    "nextEventSequence": 4,
+    "support": {
+      "id": "palace:wall:1",
+      "layerId": "palace:wall:1",
+      "height": 3.6,
+      "normal": {
+        "x": 0,
+        "y": 1,
+        "z": 0
+      },
+      "surface": "stone",
+      "walkable": true,
+      "landable": true
+    }
+  },
+  "eye": {
+    "x": 18.18913137077683,
+    "y": 3.805438776428685,
+    "z": -431.97436086927087
+  },
+  "camera": {
+    "kind": "resolved",
+    "position": [
+      0.16889018385241805,
+      18.419738138372132,
+      -432
+    ],
+    "lookAt": [
+      18.110693580773994,
+      3.7980573335717938,
+      -432
+    ],
+    "up": [
+      0,
+      1,
+      0
+    ],
+    "cut": false,
+    "occluded": true
+  },
+  "projection": {
+    "near": 0.022500000280141833,
+    "verticalFovDegrees": 59,
+    "aspect": 1.7777777777777777
+  }
+}
