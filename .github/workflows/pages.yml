@@ -6,10 +6,6 @@ on:
     paths: ['.github/workflows/pages.yml', 'release/build6-manifest.json']
   workflow_dispatch:
     inputs:
-      draft_release_id:
-        description: Numeric ID of the same-repository private draft holding the verified runtime ZIP
-        required: true
-        type: string
       publish:
         description: Publish verified output from main to the existing Pages environment
         required: false
@@ -44,38 +40,93 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: Verify public source files without binary exceptions
         run: pnpm audit:public
-      - name: Retrieve the pinned pre-reviewed game ZIP from the private draft only
+      - name: Retrieve the exact authorized release asset by ID
         env:
-          RELEASE_ID: ${{ inputs.draft_release_id }}
+          ASSET_ID: ${{ secrets.GUGU_DRAFT_ASSET_ID }}
           DRAFT_TOKEN: ${{ secrets.GUGU_DRAFT_READ_TOKEN }}
         shell: bash
         run: |
-          set -euo pipefail
-          [[ -n "${DRAFT_TOKEN:-}" ]] || { echo "::error::The protected draft-intake secret is not configured."; exit 1; }
-          endpoint="https://api.github.com/repos/samie1634/gugu-seoul/releases"
-          name=$(jq -er '.artifact.name' release/build6-manifest.json)
-          hash=$(jq -er '.artifact.sha256' release/build6-manifest.json)
-          bytes=$(jq -er '.artifact.bytes' release/build6-manifest.json)
-          get=(curl -fsS --proto '=https' --max-time 90 -H "Authorization: Bearer $DRAFT_TOKEN" -H 'X-GitHub-Api-Version: 2022-11-28')
-          if [[ "$GITHUB_EVENT_NAME" == push ]]; then
-            RELEASE_ID=$("${get[@]}" -H 'Accept: application/vnd.github+json' "$endpoint?per_page=100" |
-              jq -er --arg name "$name" --arg hash "sha256:$hash" --argjson bytes "$bytes" '
-                [.[] | select(.draft == true and .published_at == null and any(.assets[]?;
-                  .name == $name and .state == "uploaded" and .size == $bytes and .digest == $hash))] |
-                select(length == 1) | .[0].id') || {
-                  echo "::error::The protected draft credential cannot see exactly one matching private draft."
-                  exit 1
-                }
-          fi
-          [[ "$RELEASE_ID" =~ ^[1-9][0-9]{0,18}$ ]]
-          asset=$("${get[@]}" -H 'Accept: application/vnd.github+json' "$endpoint/$RELEASE_ID" |
-            jq -er --arg name "$name" --arg hash "sha256:$hash" --argjson bytes "$bytes" '
-              select(.draft == true and .published_at == null) |
-              [.assets[] | select(.name == $name and .state == "uploaded" and .size == $bytes and .digest == $hash)] |
-              select(length == 1) | .[0].id')
-          [[ "$asset" =~ ^[1-9][0-9]{0,18}$ ]]
-          "${get[@]}" --location --max-filesize "$bytes" --proto-redir '=https' -H 'Accept: application/octet-stream' \
-            "$endpoint/assets/$asset" --output "$RUNNER_TEMP/gugu-runtime.zip"
+          python3 - <<'PYCODE'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          import re
+          from urllib.error import HTTPError
+          from urllib.parse import urlsplit
+          from urllib.request import HTTPRedirectHandler, Request, build_opener
+
+          EXPECTED = {
+              "name": "GuguSeoul-Build6-Pages-Runtime-Only.zip",
+              "bytes": 38316416,
+              "sha256": "31d6933950dd4b01e9cc9e7b49846a89d9361078b0a94a02300e5355b4a50849",
+          }
+          RELEASE_STORAGE = "release-assets.githubusercontent.com"
+          GITHUB_API = "https://api.github.com/repos/samie1634/gugu-seoul/releases/assets/"
+
+          class IntakeError(Exception):
+              """Messages are deliberately safe to print; no request URL, token, or server body."""
+
+          class NoRedirect(HTTPRedirectHandler):
+              def redirect_request(self, request, fp, code, message, headers, newurl):
+                  return None
+
+          def receive(open_request, asset_id, token, expected):
+              if not re.fullmatch(r"[1-9][0-9]{0,18}", asset_id):
+                  raise IntakeError("The protected release asset ID is missing or malformed.")
+              if not token or any(c.isspace() for c in token):
+                  raise IntakeError("The protected draft-read credential is missing or malformed.")
+              asset = Request(GITHUB_API + asset_id, headers={
+                  "Authorization": "Bearer " + token,
+                  "Accept": "application/octet-stream",
+                  "X-GitHub-Api-Version": "2022-11-28",
+              })
+              try:
+                  response = open_request(asset, timeout=90)
+              except HTTPError as first:
+                  if first.code != 302:
+                      raise IntakeError(f"GitHub Get release asset returned HTTP {first.code}; stopping.") from None
+                  target = first.headers.get("Location", "")
+                  first.close()
+                  dest = urlsplit(target)
+                  if not target or any(ord(c) <= 32 or ord(c) == 127 for c in target) or (
+                      dest.scheme != "https" or dest.netloc != RELEASE_STORAGE or not dest.path or dest.fragment
+                  ):
+                      raise IntakeError("GitHub returned an unapproved release asset redirect; stopping.") from None
+                  # This new request deliberately lacks Authorization, cookies and other API credentials.
+                  try:
+                      response = open_request(Request(target, headers={"Accept": "application/octet-stream"}), timeout=90)
+                  except HTTPError as second:
+                      raise IntakeError(f"GitHub release asset storage returned HTTP {second.code}; stopping.") from None
+              with response:
+                  if response.status != 200:
+                      raise IntakeError(f"GitHub release asset returned HTTP {response.status}; stopping.")
+                  if response.headers.get("Content-Type", "").split(";")[0].strip().lower() == "application/json":
+                      raise IntakeError("Expected binary ZIP; GitHub returned JSON metadata instead.")
+                  raw = response.read(expected["bytes"] + 1)
+              if len(raw) != expected["bytes"] or hashlib.sha256(raw).hexdigest() != expected["sha256"]:
+                  raise IntakeError("Release asset size or SHA-256 does not match the approved runtime ZIP.")
+              return raw
+
+          def entry():
+              try:
+                  manifest = json.loads(Path("release/build6-manifest.json").read_text())
+                  if manifest.get("artifact") != EXPECTED:
+                      raise IntakeError("Runtime release manifest changed; stopping.")
+                  connection = build_opener(NoRedirect())
+                  raw = receive(connection.open, os.environ.get("ASSET_ID", ""), os.environ.get("DRAFT_TOKEN", ""), EXPECTED)
+                  with (Path(os.environ["RUNNER_TEMP"]) / "gugu-runtime.zip").open("xb") as file:
+                      file.write(raw)
+                  print("Exact approved runtime ZIP size and SHA-256 verified.")
+              except IntakeError as exc:
+                  raise SystemExit(str(exc)) from None
+              except Exception:
+                  # Do not print urllib exceptions or tracebacks: they can contain signed storage URLs.
+                  raise SystemExit("The protected GitHub asset intake could not complete safely.") from None
+
+          if __name__ == "__main__":
+              entry()
+          PYCODE
       - name: Verify archive, rights scope and binary paths and hydrate only runtime inputs
         run: python3 tools/verify-pages-release.py hydrate "$RUNNER_TEMP/gugu-runtime.zip"
       - name: Type check
