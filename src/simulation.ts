@@ -11,12 +11,23 @@ export interface Obstacle {
 export interface FlightInput {
   forward: number;
   turn: number;
+  /** Optional absolute world heading supplied by manual camera-relative controls. */
+  moveHeading?: number;
+  /** Manual left/right arrow input also turns the local camera; never networked. */
+  cameraTurn?: number;
+  roll?: number;
+  accelerate?: boolean;
+  peckHeld?: boolean;
+  peckReleased?: boolean;
+  /** Internal scene-owned assisted flight, never raw DOM input. Targets use body centre. */
+  owlHuntMotion?: { target: { x: number; y: number; z: number }; speed: number; phase: 'dive' | 'rise' };
   flapPressed: boolean;
   flapHeld: boolean;
   descend: boolean;
 }
 
 export interface BirdState {
+  movementScale?: number;
   x: number;
   y: number;
   z: number;
@@ -49,12 +60,14 @@ export function emptyInput(): FlightInput {
   return { forward: 0, turn: 0, flapPressed: false, flapHeld: false, descend: false };
 }
 
-export function advanceBird(state: BirdState, input: FlightInput, seconds: number, obstacles: readonly Obstacle[]): void {
+export function advanceBird(state: BirdState, input: FlightInput, seconds: number, obstacles: readonly Obstacle[], movementScale = 1): void {
   if (!Number.isFinite(seconds) || seconds <= 0) return;
   const dt = Math.min(seconds, 0.1);
+  const scale = movementScale === .5 ? .5 : 1, ratio = scale / (state.movementScale ?? 1);
+  state.vx *= ratio; state.vy *= ratio; state.vz *= ratio; state.movementScale = scale;
   if (input.flapPressed) {
     state.grounded = false;
-    state.vy = Math.min(16, Math.max(0, state.vy) + 9.4);
+    state.vy = Math.min(16 * scale, Math.max(0, state.vy) + 9.4 * scale);
     state.flapAge = 0;
     state.flaps += 1;
   }
@@ -65,23 +78,28 @@ export function advanceBird(state: BirdState, input: FlightInput, seconds: numbe
 }
 
 function integrate(s: BirdState, input: FlightInput, dt: number, obstacles: readonly Obstacle[]): void {
+  const scale = s.movementScale ?? 1;
   const oldX = s.x;
   const oldZ = s.z;
   const oldY = s.y;
-  s.heading += Math.max(-1, Math.min(1, input.turn)) * (s.grounded ? 2.35 : 1.35) * dt;
+  if (Number.isFinite(input.moveHeading)) s.heading = input.moveHeading!;
+  else s.heading += Math.max(-1, Math.min(1, input.turn)) * (s.grounded ? 2.35 : 1.35) * dt * scale;
   const gliding = !s.grounded && input.flapHeld && s.heldSeconds >= GLIDE_DELAY && !input.descend;
-  const speed = s.grounded ? Math.max(-1, Math.min(1, input.forward)) * 6.2
-    : (gliding ? 22 : 17) * (1 + input.forward * 0.25);
+  const directing = Math.abs(input.forward) > 0.001 || Math.abs(input.turn) > 0.001;
+  const forwardFlight = input.flapHeld || s.flapAge < .42 || input.accelerate;
+  const speed = scale * (s.grounded ? Math.max(-1, Math.min(1, input.forward)) * 6.2
+    // Legacy selectable species cannot hover; retain passive falls and C descent.
+    : directing || forwardFlight || input.descend ? (gliding ? 22 : 17) * (1 + input.forward * 0.25) : 0);
   const acceleration = 1 - Math.exp(-(s.grounded ? 14 : 3.5) * dt);
   s.vx += (Math.sin(s.heading) * speed - s.vx) * acceleration;
   s.vz += (-Math.cos(s.heading) * speed - s.vz) * acceleration;
   if (!s.grounded) {
     if (gliding) {
       // Holding extends the wings once; it never repeats the take-off impulse.
-      s.vy += (-1.7 - s.vy) * (1 - Math.exp(-3.5 * dt));
+      s.vy += (-1.7 * scale - s.vy) * (1 - Math.exp(-3.5 * dt));
     } else {
-      s.vy -= (input.descend ? 25 : 16) * dt;
-      s.vy = Math.max(input.descend ? -21 : -16, s.vy);
+      s.vy -= (input.descend ? 25 : 16) * dt * scale;
+      s.vy = Math.max((input.descend ? -21 : -16) * scale, s.vy);
     }
   }
   s.x += s.vx * dt;

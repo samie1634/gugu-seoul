@@ -3,14 +3,23 @@ import {
   type BirdState, type FlightInput, type MotionEvent,
 } from '../motion.ts';
 import type { NativeBody, NativeSupport, NativeSupportProbe, NativeSweepHit, NativeWorldQueries, Vec3 } from './contracts.ts';
+import type { WaterContact } from '../../../map/contracts.ts';
 
 export interface NativeMotionTuning {
   readonly walkSpeed: number;
   readonly flightSpeed: number;
   readonly glideSpeed: number;
+  /** Optional first half-second after pushing off land; general flight is unchanged. */
+  readonly takeoff?: Readonly<{ seconds: number; launchSpeed: number; endSpeed: number; liftSpeed: number }>;
+  /** Multiplies vertical, accelerated and assisted movement, in addition to the tuned speeds. */
+  readonly movementScale?: number;
 }
 
 export interface NativeMotionInit {
+  /** Only the kestrel may hold its horizontal position in flight. */
+  readonly canHover?: boolean;
+  /** A short released flap limits only the added rise; long holds retain their trajectory. */
+  readonly shortTapHeightRatio?: number;
   readonly body?: NativeBody;
   readonly tuning?: Partial<NativeMotionTuning>;
   /** Body-centred snapshot. Omit for a spawn at feet. */
@@ -22,15 +31,32 @@ export interface NativeMotionInit {
 }
 
 export interface NativeMotionState extends BirdState {
+  readonly canHover: boolean;
+  readonly shortTapHeightRatio: number;
+  shortTapPeak: number | null;
+  shortTapUntil: number;
+  takeoffAge: number|null;
   readonly body: NativeBody;
   readonly tuning: NativeMotionTuning;
   readonly sourceId: string;
   time: number;
   nextEventSequence: number;
   support: NativeSupport | null;
+  boostSeconds: number;
+  /** Short, bounded external impulse. A new flap returns to ordinary flight. */
+  knockbackSeconds: number;
 }
 
-export type NativeMotionWorld = Pick<NativeWorldQueries, 'supportAt' | 'sweepBody'>;
+export type NativeMotionWorld = Pick<NativeWorldQueries, 'supportAt' | 'sweepBody'> & {
+  waterAt?: (feet: Vec3) => WaterContact | null | undefined;
+  /** Optional transactional kinematic surfaces, owned by the frame preview. */
+  beginSubstep?: (state: NativeMotionState, seconds: number) => void;
+  leaveSupport?: (state: NativeMotionState) => void;
+  endSubstep?: (state: NativeMotionState, time: number) => void;
+  sweepMovingBody?: (from: Vec3, to: Vec3, body: NativeBody, fromTime: number, toTime: number) => NativeSweepHit | null | undefined;
+  resolveMovingContact?: (state: NativeMotionState, hit: NativeSweepHit, time: number, endTime: number) => { handled: boolean; landed?: number };
+
+};
 export type NativeMotionFailure = 'invalid-state' | 'world-unavailable' | 'malformed-query' | 'initial-overlap';
 
 interface FrameResult {
@@ -58,6 +84,7 @@ const DEFAULT_TUNING: NativeMotionTuning = Object.freeze({
 });
 
 const FLAP_SPEED = 9.4;
+const SHORT_TAP_SECONDS = .15;
 const MAX_RISE_SPEED = 16;
 const MAX_DIVE_SPEED = 21;
 const HOLD_EPS = 1e-9;
@@ -91,13 +118,16 @@ function validBody(body: NativeBody): boolean {
 
 function validState(state: Readonly<NativeMotionState>): boolean {
   return validPoint(state) && [state.heading, state.vx, state.vy, state.vz, state.heldSeconds,
-    state.flapAge, state.steps, state.flaps, state.time].every(Number.isFinite) &&
+    state.flapAge, state.steps, state.flaps, state.time, state.knockbackSeconds].every(Number.isFinite) &&
     state.x >= BOUNDS.minX && state.x <= BOUNDS.maxX && state.z >= BOUNDS.minZ &&
     state.z <= BOUNDS.maxZ && state.y <= MAX_ALTITUDE &&
-    state.time >= 0 && state.heldSeconds >= 0 && state.steps >= 0 && state.flapAge >= 0 &&
+    state.time >= 0 && state.knockbackSeconds >= 0 && state.knockbackSeconds <= 2.4 && state.heldSeconds >= 0 && state.steps >= 0 && state.flapAge >= 0 &&
     state.flaps >= 0 && typeof state.sourceId === 'string' && state.sourceId.length > 0 &&
     Number.isSafeInteger(state.nextEventSequence) && state.nextEventSequence > 0 &&
-    validBody(state.body) && !!state.tuning &&
+    typeof state.canHover === 'boolean' && Number.isFinite(state.shortTapHeightRatio) && state.shortTapHeightRatio > 0 && state.shortTapHeightRatio <= 1 &&
+    (state.takeoffAge === null || Number.isFinite(state.takeoffAge) && state.takeoffAge >= 0) &&
+    (!state.tuning?.takeoff || [state.tuning.takeoff.seconds, state.tuning.takeoff.launchSpeed, state.tuning.takeoff.endSpeed, state.tuning.takeoff.liftSpeed].every(x => Number.isFinite(x) && x > 0)) &&
+    Number.isFinite(state.shortTapUntil) && (state.shortTapPeak === null || Number.isFinite(state.shortTapPeak)) && validBody(state.body) && !!state.tuning && Number.isFinite(state.tuning.movementScale ?? 1) && (state.tuning.movementScale ?? 1) > 0 && (state.tuning.movementScale ?? 1) <= 1 &&
     [state.tuning.walkSpeed, state.tuning.flightSpeed, state.tuning.glideSpeed].every(n => Number.isFinite(n) && n > 0);
 }
 
@@ -111,11 +141,12 @@ export function createNativeMotionState(init: NativeMotionInit = {}): NativeMoti
     heldSeconds: 0, flapAge: 10, steps: 0, flaps: 0,
   };
   const state: NativeMotionState = {
-    ...bird,
+    ...bird, canHover: init.canHover ?? false, shortTapHeightRatio: init.shortTapHeightRatio ?? 1,
+    shortTapPeak: null, shortTapUntil: 0, takeoffAge: null,
     body: Object.freeze({ ...body, eyeFromSoleM: Object.freeze({ ...body.eyeFromSoleM }) }),
     tuning: Object.freeze({ ...DEFAULT_TUNING, ...init.tuning }),
     sourceId: init.sourceId ?? 'player', time: init.time ?? 0, nextEventSequence: init.nextEventSequence ?? 1,
-    support: null,
+    support: null, boostSeconds: 0, knockbackSeconds: 0,
   };
   if (!validState(state)) throw new RangeError('Invalid native motion state');
   return state;
@@ -150,6 +181,17 @@ function query<T>(call: () => T | null | undefined): T | null {
   return value;
 }
 
+/** Map queries include a proximity band; buoyancy starts at the actual surface. */
+function waterContact(world: NativeMotionWorld, at: Vec3): WaterContact | null {
+  if (!world.waterAt) return null;
+  const water = query(() => world.waterAt!(at));
+  if (!water) return null;
+  if (typeof water.id !== 'string' || !water.id || !Number.isFinite(water.y) ||
+      !Number.isFinite(water.depth) || water.depth < 0 || !water.current ||
+      ![water.current.x, water.current.z].every(Number.isFinite)) throw new RejectedFrame('malformed-query');
+  return at.y <= water.y + CONTACT_EPS ? water : null;
+}
+
 function supportAt(
   world: NativeMotionWorld, body: NativeBody, at: Vec3, previousFeetY: number,
   maxRiseM: number, maxDropM: number, layerId?: string,
@@ -169,13 +211,15 @@ function supportAt(
   return { ...support, normal: { ...support.normal } };
 }
 
-function sweepBody(world: NativeMotionWorld, from: Vec3, to: Vec3, body: NativeBody): NativeSweepHit | null {
-  const hit = query(() => world.sweepBody(from, to, body));
+function sweepBody(world: NativeMotionWorld, from: Vec3, to: Vec3, body: NativeBody, fromTime?: number, toTime?: number): NativeSweepHit | null {
+  const hit = query(() => fromTime !== undefined && toTime !== undefined && world.sweepMovingBody
+    ? world.sweepMovingBody(from, to, body, fromTime, toTime) : world.sweepBody(from, to, body));
   if (hit === null) return null;
   if (!Number.isFinite(hit.fraction) || hit.fraction < 0 || hit.fraction > 1 ||
       !validPoint(hit.point) || !validNormal(hit.normal) ||
       typeof hit.colliderId !== 'string' || !hit.colliderId ||
-      (hit.layerId !== undefined && typeof hit.layerId !== 'string')) throw new RejectedFrame('malformed-query');
+      (hit.layerId !== undefined && typeof hit.layerId !== 'string') ||
+      (hit.edgeSlide !== undefined && (!validNormal(hit.edgeSlide) || Math.abs(hit.edgeSlide.y) > 1e-7))) throw new RejectedFrame('malformed-query');
   const expected = interpolate(from, to, hit.fraction);
   if (Math.hypot(hit.point.x - expected.x, hit.point.y - expected.y, hit.point.z - expected.z) > CONTACT_EPS) {
     throw new RejectedFrame('malformed-query');
@@ -205,14 +249,27 @@ function contactUnder(state: NativeMotionState, world: NativeMotionWorld): Nativ
 }
 
 function flap(state: NativeMotionState, world: NativeMotionWorld, events: MotionEvent[]): void {
-  const velocity = Math.min(MAX_RISE_SPEED, Math.max(0, state.vy) + FLAP_SPEED);
+  const scale = state.tuning.movementScale ?? 1;
+  const launch = state.grounded ? state.tuning.takeoff : undefined;
+  const velocity = Math.min(MAX_RISE_SPEED * scale, Math.max(0, state.vy) + (launch?.liftSpeed ?? FLAP_SPEED) * scale);
   if (velocity <= state.vy || state.y >= MAX_ALTITUDE) return;
   const from = point(state);
   const hit = sweepBody(world, from, { ...from, y: Math.min(MAX_ALTITUDE, from.y + 0.001) }, state.body);
   if (hit) return;
 
   const impulse = velocity - state.vy;
+  if (world.leaveSupport) query(() => { world.leaveSupport!(state); return true; });
+  const gravity = 16 * scale, priorRise = Math.max(0, state.vy) ** 2 / (2 * gravity);
+  const fullRise = velocity ** 2 / (2 * gravity);
+  state.shortTapPeak = state.shortTapHeightRatio < 1 ? state.y + priorRise + (fullRise - priorRise) * state.shortTapHeightRatio : null;
+  state.shortTapUntil = state.time + SHORT_TAP_SECONDS;
   state.vy = velocity;
+  if (launch) {
+    state.takeoffAge = 0;
+    state.vx = Math.sin(state.heading) * launch.launchSpeed;
+    state.vz = -Math.cos(state.heading) * launch.launchSpeed;
+  }
+  state.knockbackSeconds = 0;
   state.grounded = false;
   state.support = null;
   state.flapAge = 0;
@@ -221,7 +278,7 @@ function flap(state: NativeMotionState, world: NativeMotionWorld, events: Motion
 }
 
 function canGlide(state: NativeMotionState, input: Readonly<FlightInput>): boolean {
-  return !state.grounded && input.flapHeld && !input.descend && state.heldSeconds >= GLIDE_DELAY - HOLD_EPS;
+  return !state.grounded && state.knockbackSeconds <= 0 && input.flapHeld && !input.descend && state.heldSeconds >= GLIDE_DELAY - HOLD_EPS;
 }
 
 function axis(value: number): number {
@@ -254,7 +311,16 @@ export function advanceNativeMotion(
     }
 
     if (!controls.flapHeld || controls.flapPressed) next.heldSeconds = 0;
-    if (controls.flapPressed) flap(next, world, events);
+    if (controls.flapPressed && !controls.descend) flap(next, world, events);
+    if (next.shortTapPeak !== null) {
+      if (next.grounded || next.knockbackSeconds > 0 || controls.descend || controls.owlHuntMotion || next.time > next.shortTapUntil + HOLD_EPS) next.shortTapPeak = null;
+      else if (!controls.flapHeld) {
+        // Keep the normal full impulse until a short release is known. No position
+        // snap, extra wingbeat or altered gravity; keyboard and touch share this path.
+        next.vy = Math.min(next.vy, Math.sqrt(2 * 16 * (next.tuning.movementScale ?? 1) * Math.max(0, next.shortTapPeak - next.y)));
+        next.shortTapPeak = null;
+      }
+    }
 
     const count = Math.ceil(acceptedSeconds / MAX_SUBSTEP_SECONDS);
     const dt = acceptedSeconds / count;
@@ -336,7 +402,7 @@ function move(state: NativeMotionState, dt: number, world: NativeMotionWorld): n
   for (let i = 0; i < MAX_CONTACTS && remaining > HOLD_EPS; i += 1) {
     const from = point(state);
     const to = plannedEnd(state, from, remaining, world);
-    const solid = sweepBody(world, from, to, state.body);
+    const solid = sweepBody(world, from, to, state.body, state.time + dt - remaining, state.time + dt);
     const landing = state.grounded ? null : landingOnSegment(world, state.body, from, to, solid?.fraction ?? 1);
     if (landing && !sweepBody(world, landing.position, landing.position, state.body)) {
       const impact = Math.max(0, -state.vy);
@@ -352,12 +418,20 @@ function move(state: NativeMotionState, dt: number, world: NativeMotionWorld): n
     }
 
     assignPosition(state, solid.point);
+    const moving = world.resolveMovingContact ? query(() => world.resolveMovingContact!(state, solid, state.time + dt - remaining + remaining * solid.fraction, state.time + dt)) : null;
+    if (moving?.landed !== undefined) return moving.landed;
+    if (moving?.handled) { remaining *= 1 - solid.fraction; continue; }
     const n = solid.normal;
     const inward = state.vx * n.x + state.vy * n.y + state.vz * n.z;
     if (inward >= -HOLD_EPS) break;
     state.vx -= inward * n.x;
     state.vy -= inward * n.y;
     state.vz -= inward * n.z;
+    if (!state.grounded && n.y > .999 && solid.edgeSlide && Math.hypot(state.vx, state.vz) < .04) {
+      // No invented support or position snap: leave an unsupported stone lip
+      // with a small bounded tangent velocity, checked by the next normal sweep.
+      state.vx = solid.edgeSlide.x * .12; state.vz = solid.edgeSlide.z * .12;
+    }
     remaining *= 1 - solid.fraction;
   }
 
@@ -376,23 +450,70 @@ function integrate(
   state: NativeMotionState, input: Readonly<FlightInput>, dt: number, time: number,
   world: NativeMotionWorld, events: MotionEvent[],
 ): void {
+  if (world.beginSubstep) query(() => { world.beginSubstep!(state, dt); return true; });
   const wasGrounded = state.grounded;
   const start = point(state);
-  const gliding = canGlide(state, input);
-  state.heading += input.turn * (wasGrounded ? 2.35 : 1.35) * dt;
+  const beforeWater = waterContact(world, nativeFeet(state));
+  const floating = !!beforeWater && !wasGrounded && state.vy <= 0 && !input.flapPressed;
+  const gliding = !floating && canGlide(state, input);
+  const scale = state.tuning.movementScale ?? 1;
+  if (Number.isFinite(input.moveHeading)) state.heading = input.moveHeading!;
+  else state.heading += input.turn * (wasGrounded ? 2.35 : 1.35) * dt * scale;
   const { walkSpeed, flightSpeed, glideSpeed } = state.tuning;
+  state.boostSeconds = !wasGrounded && !floating && input.accelerate ? Math.min(6,state.boostSeconds+dt) : 0;
+  const boost = Math.min(25,state.boostSeconds * (25/6)) * scale;
+  const directing = Math.abs(input.forward) > 0.001 || Math.abs(input.turn) > 0.001;
+  const knocked = !wasGrounded && state.knockbackSeconds > 0;
+  // Powered flight and gliding need forward airspeed except for kestrels.
+  // Passive falls and vehicle knockback keep the existing unpowered physics.
+  const forwardFlight = !state.canHover && !knocked && (input.flapHeld || state.flapAge < .42 || input.accelerate);
+  const launch = !input.accelerate && !knocked && state.takeoffAge !== null ? state.tuning.takeoff : undefined;
+  const ordinaryAirSpeed = ((gliding ? glideSpeed : flightSpeed) + boost) * (1 + input.forward * 0.14);
+  // A body already accelerated by the leg push must not snap directly to cruise.
+  const launchCap = launch ? launch.launchSpeed + (launch.endSpeed - launch.launchSpeed)
+    * Math.min(1, (state.takeoffAge ?? 0) / launch.seconds) : Infinity;
   const speed = wasGrounded ? (state.support?.walkable ? input.forward * walkSpeed : 0) :
-    (gliding ? glideSpeed : flightSpeed) * (1 + input.forward * 0.25);
-  const acceleration = 1 - Math.exp(-(wasGrounded ? 14 : 3.5) * dt);
-  state.vx += (Math.sin(state.heading) * speed - state.vx) * acceleration;
-  state.vz += (-Math.cos(state.heading) * speed - state.vz) * acceleration;
+    directing || forwardFlight ? Math.min(160/3.6 * scale, ordinaryAirSpeed, launchCap) : 0;
+  const acceleration = 1 - Math.exp(-(wasGrounded ? 14 : knocked ? .28 : launch ? 15 : 3.5) * dt);
+  if (floating) {
+    // Rest on water without air-speed thrust or current drift. Space releases it.
+    state.vx = 0; state.vz = 0;
+  } else if (wasGrounded || !input.descend) {
+      state.vx += (Math.sin(state.heading) * speed - state.vx) * acceleration;
+      state.vz += (-Math.cos(state.heading) * speed - state.vz) * acceleration;
+  }
   if (gliding) {
-    state.vy += (-1.7 - state.vy) * (1 - Math.exp(-3.5 * dt));
+    state.vy += (-1.7 * scale - state.vy) * (1 - Math.exp(-3.5 * dt));
   } else if (!wasGrounded) {
-    state.vy = Math.max(input.descend ? -MAX_DIVE_SPEED : -16, state.vy - (input.descend ? 25 : 16) * dt);
+    state.vy = input.descend ? state.vy - 88.2 * scale * dt : Math.max(-16 * scale, state.vy - 16 * scale * dt);
   }
 
+  // Assisted hunting still uses the normal swept-body, moving-car and landing path.
+  const hunt = input.owlHuntMotion;
+  if (hunt && !wasGrounded && [hunt.target.x, hunt.target.y, hunt.target.z, hunt.speed].every(Number.isFinite) && hunt.speed > 0) {
+    const dx = hunt.target.x - state.x, dy = hunt.target.y - state.y, dz = hunt.target.z - state.z;
+    const distance = Math.hypot(dx, dy, dz), speed = Math.min(hunt.speed * scale, distance / dt);
+    const factor = distance > 1e-9 ? speed / distance : 0;
+    state.vx = dx * factor; state.vy = dy * factor; state.vz = dz * factor;
+    if (Math.hypot(dx, dz) > 1e-6) state.heading = Math.atan2(dx, -dz);
+  }
   const impactSpeed = move(state, dt, world);
+  const water = waterContact(world, nativeFeet(state));
+  let restingOnWater = !!water && !state.grounded && state.vy <= 0 && !input.flapPressed;
+  if (water && restingOnWater) {
+    const from = point(state), to = { ...from, y: water.y - 0.06 + state.body.centreToSoleM };
+    // Water immersion must not teleport the body into a neighboring stone or
+    // moving vehicle. Preserve the last swept position until it can float clear.
+    if (!sweepBody(world, from, to, state.body) && !sweepBody(world, to, to, state.body)) {
+      assignPosition(state, to); state.vy = 0; state.vx = 0; state.vz = 0;
+    } else restingOnWater = false;
+  }
+  if (world.endSubstep) query(() => { world.endSubstep!(state, time); return true; });
+  state.knockbackSeconds = state.grounded ? 0 : Math.max(0, state.knockbackSeconds - dt);
+  if (state.takeoffAge !== null) {
+    state.takeoffAge += dt;
+    if (state.grounded || restingOnWater || knocked || state.takeoffAge >= (state.tuning.takeoff?.seconds ?? 0)) state.takeoffAge = null;
+  }
   state.time = time;
   state.flapAge += dt;
   if (input.flapHeld) state.heldSeconds += dt;
@@ -404,7 +525,8 @@ function integrate(
   }
   if (impactSpeed !== null) emit(state, events, { type: 'land', impactSpeed }, impactSpeed / MAX_DIVE_SPEED);
   if (wasGrounded && !state.grounded) emit(state, events, { type: 'support-lost' }, groundIntensity(state));
-  if (state.grounded) state.mode = walked / dt > 0.045 ? 'walk' : 'rest';
+  if (restingOnWater) state.mode = 'rest';
+  else if (state.grounded) state.mode = walked / dt > 0.045 ? 'walk' : 'rest';
   else if (canGlide(state, input)) state.mode = 'glide';
-  else state.mode = state.flapAge < 0.42 ? 'flap' : 'fall';
+  else state.mode = !input.descend && state.flapAge < 0.42 ? 'flap' : 'fall';
 }

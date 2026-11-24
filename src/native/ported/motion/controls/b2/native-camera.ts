@@ -1,4 +1,5 @@
 import type { NativeBody, NativeSweepHit, NativeWorldQueries, Vec3 } from '../../locomotion/b2/contracts.ts';
+import { birdOrbitPosition, orbitViewDirection, stableOrbitStep, validCameraOrbit, type CameraOrbitAngles } from '../../../../../camera-orbit.ts';
 import {
   cameraNearRadius, type CameraBird, type CameraProjection, type ChaseOffsets,
   type Vec3 as CameraPoint, type ViewMode,
@@ -14,7 +15,7 @@ export interface NativeCameraMetrics extends ChaseOffsets {
 export interface NativeCameraRequest {
   readonly bird: CameraBird;
   readonly mode: ViewMode;
-  readonly world: Pick<NativeWorldQueries, 'sphereClear' | 'sweepSphere'>;
+  readonly world: Pick<NativeWorldQueries, 'sphereClear' | 'sweepSphere' | 'sweepCameraMotion'>;
   readonly metrics: NativeCameraMetrics;
   readonly projection: CameraProjection;
   readonly acceptedSeconds: number;
@@ -23,6 +24,7 @@ export interface NativeCameraRequest {
   /** Final posed eye in world metres, after the caller updates rig matrices. */
   readonly posedEyeWorld?: Vec3;
   readonly reducedMotion?: boolean;
+  readonly orbit?: CameraOrbitAngles;
 }
 
 export type NativeCameraResult =
@@ -84,9 +86,9 @@ function cameraClearance(world: NativeCameraRequest['world'], radiusM: number) {
 }
 
 export function resolveNativeCamera({
-  bird, mode, world, metrics, projection, acceptedSeconds, previousPosition, posedEyeWorld, reducedMotion,
+  bird, mode, world, metrics, projection, acceptedSeconds, previousPosition, posedEyeWorld, reducedMotion, orbit,
 }: NativeCameraRequest): NativeCameraResult {
-  if (!bird || !metrics?.body || !projection) return { kind: 'blocked', reason: 'invalid-view' };
+  if (!bird || !metrics?.body || !projection || !validCameraOrbit(orbit)) return { kind: 'blocked', reason: 'invalid-view' };
   const centre: CameraPoint = [bird.x, bird.y, bird.z];
   const { body, chaseTargetOffset, chaseGroundOffset, chaseAirOffset } = metrics;
   const radius = cameraNearRadius(projection);
@@ -111,7 +113,8 @@ export function resolveNativeCamera({
   const localEye: CameraPoint = [eye.x, eye.y - body.centreToSoleM, eye.z];
   const nominalTarget = first ? centre : add(centre, rotate(chaseTargetOffset));
   const offset = first ? localEye : bird.grounded ? chaseGroundOffset : chaseAirOffset;
-  const desired = first && posedEyeWorld ? toCamera(posedEyeWorld) : add(centre, rotate(offset));
+  const normalPosition = first && posedEyeWorld ? toCamera(posedEyeWorld) : add(centre, rotate(offset));
+  const desired = first ? normalPosition : birdOrbitPosition(nominalTarget, normalPosition, orbit);
   if (!isCameraPoint(nominalTarget) || !isCameraPoint(desired) ||
     !Number.isFinite(distance(centre, nominalTarget) + distance(nominalTarget, desired) +
       (previousPosition ? distance(previousPosition, centre) + distance(previousPosition, desired) : 0))) {
@@ -136,12 +139,52 @@ export function resolveNativeCamera({
       }
       anchor = reference;
     }
-    if (previousPosition && !clear(previousPosition)) return { kind: 'blocked', reason: 'no-clear-previous' };
+    const displacedPrevious = previousPosition && !clear(previousPosition);
 
     target = first ? anchor : clip(anchor, nominalTarget).position;
     const goal = clip(target, desired).position;
     position = goal;
-    if (previousPosition) {
+    if (displacedPrevious && previousPosition) {
+      // A moving obstacle may occupy yesterday's valid camera position. Recover
+      // only along a chord verified against its entire staged trajectory. Static
+      // overlaps and unknown queries still block; no through-wall reset or cut.
+      if (!world.sweepCameraMotion) return { kind: 'blocked', reason: 'no-clear-previous' };
+      const candidates = first ? [goal] : [.04,.08,.16,.3,.5,.75,1].map(f=>mix(previousPosition,target,f)).concat([goal]);
+      // Retraction toward the bird can point straight through an approaching
+      // vehicle. Also try moving outward from the first temporal contact. Each
+      // candidate still needs a full swept-time clearance test, including walls.
+      if (!first) {
+        const contact = world.sweepCameraMotion(toWorld(previousPosition), toWorld(previousPosition), radius + skin);
+        if (contact && validHit(contact, previousPosition, previousPosition)) {
+          for (const distance of [.04, .08, .16, .3, .5, .75, 1, 2, 4]) {
+            candidates.push([
+              previousPosition[0] + contact.normal.x * distance,
+              previousPosition[1] + contact.normal.y * distance,
+              previousPosition[2] + contact.normal.z * distance,
+            ]);
+          }
+        }
+      }
+      let recovered: CameraPoint | undefined;
+      for (const candidate of candidates) {
+        if (!clear(candidate)) continue;
+        const hit = world.sweepCameraMotion(toWorld(previousPosition),toWorld(candidate),radius+skin);
+        if (hit === null) { recovered=candidate;break; }
+        if (!validHit(hit,previousPosition,candidate)) return { kind:'blocked',reason:'invalid-query' };
+      }
+      if (!recovered) return { kind:'blocked',reason:'no-clear-previous' };
+      position=recovered;occluded=sweep(target,position)!==null;
+    }
+    const manualOrbit = !first && orbit && (orbit.yaw !== 0 || orbit.pitch !== null);
+    const orbitStart = previousPosition ?? (manualOrbit ? clip(target, normalPosition).position : undefined);
+    const orbitAlpha = previousPosition ? acceptedSeconds === 0 ? 0 : reducedMotion ? 1 : -Math.expm1(-6 * acceptedSeconds) : 1;
+    const orbitStep = !displacedPrevious && manualOrbit && orbitStart ? stableOrbitStep(target, orbitStart, desired, orbitAlpha, candidate =>
+      clear(candidate) && sweep(orbitStart, candidate) === null && sweep(target, candidate) === null) : null;
+    if (displacedPrevious) {
+      // position is the already verified temporal recovery, not a second chord.
+    } else if (orbitStep) {
+      position = orbitStep;
+    } else if (previousPosition) {
       const alpha = acceptedSeconds === 0 ? 0 : first || reducedMotion ? 1 : -Math.expm1(-6 * acceptedSeconds);
       const step = clip(previousPosition, mix(previousPosition, goal, alpha));
       position = step.position;
@@ -187,7 +230,8 @@ export function resolveNativeCamera({
   const horizontal = Math.hypot(position[0] - target[0], position[2] - target[2]);
   const nearPole = horizontal < Math.max(1e-6, 0.01 * Math.abs(position[1] - target[1]));
   const pitch = first ? Math.max(-3, Math.min(4, bird.vy * 0.28)) : 0;
-  const lookAt = first || nearPole ? add(position, [sin * 40, pitch, -cos * 40]) : target;
+  const forward: CameraPoint = [sin * 40, pitch, -cos * 40];
+  const lookAt = first || nearPole ? add(position, first && orbit ? orbitViewDirection(forward, orbit) : forward) : target;
   if (!isCameraPoint(lookAt) || (lookAt[0] === position[0] && lookAt[2] === position[2])) {
     return { kind: 'blocked', reason: 'invalid-view' };
   }

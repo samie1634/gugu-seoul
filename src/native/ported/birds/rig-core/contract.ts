@@ -1,5 +1,5 @@
 import type * as THREE from 'three';
-export type SpeciesId = 'pigeon' | 'sparrow' | 'crow' | 'magpie' | 'tawny-owl' | 'eagle-owl' | 'kestrel';
+export type SpeciesId = 'pigeon' | 'sparrow' | 'crow' | 'magpie' | 'tawny-owl' | 'eagle-owl' | 'kestrel' | 'heron';
 export type BirdLod = 0 | 1 | 2;
 export type BirdMorph = 'default' | 'gray' | 'white';
 export interface BirdBuildOptions { species: SpeciesId; lod: BirdLod; morph?: BirdMorph }

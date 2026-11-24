@@ -1,3 +1,4 @@
+import type { RealMapData } from './real-map/types.ts';
 import type { Obstacle } from '../../../simulation.ts';
 export const MAP_CONTRACT_VERSION = 2 as const;
 
@@ -6,7 +7,7 @@ export interface MapRect { x: number; z: number; width: number; depth: number }
 export type SurfaceKind = 'stone' | 'granite' | 'asphalt' | 'wood' | 'metal' | 'roof-tile' | 'water' | 'glass' | 'soil';
 export type TerrainMode = 'flat-compatible' | 'sunken-channel';
 export type MapQuality = 'mobile' | 'desktop';
-export interface MapOptions { terrain?: TerrainMode; quality?: MapQuality; proportions?: 'reference-scale' | 'legacy-compressed'; eventSessionId?: string }
+export interface MapOptions { data?: 'procedural' | 'osm'; terrain?: TerrainMode; quality?: MapQuality; proportions?: 'reference-scale' | 'legacy-compressed'; eventSessionId?: string }
 
 /** height is an absolute top, NOT a box thickness; minY is an absolute bottom. */
 export interface MapCollider extends Obstacle {
@@ -94,6 +95,7 @@ export interface RoofSpec extends MapRect {
 }
 export interface PropSpec extends MapPoint { id: string; kind: 'bench' | 'bollard' | 'planter' | 'lamp' }
 export interface MapLayout {
+  realMap?: RealMapData;
   terrain: TerrainMode;
   proportions: 'reference-scale' | 'legacy-compressed';
   quality: MapQuality;

@@ -3,8 +3,10 @@ import type { Appearance, FrameContext, SceneEvent, SurfaceId, Vec3 } from '../n
 import type { BirdLod } from '../native/ported/birds/rig-core/contract.ts';
 import type { BirdPoseInput } from '../native/ported/birds/rig-core/pose.ts';
 import type { FlightInput } from '../simulation.ts';
+import type { CameraOrbitAngles } from '../camera-orbit.ts';
+import { rebaseCameraOrbit } from '../camera-relative-movement.ts';
 import type { NativeBody, NativeSupport, NativeWorldQueries } from '../native/ported/motion/locomotion/b2/contracts.ts';
-import { advanceNativeMotion, createNativeMotionState, nativeFeet, type NativeMotionState } from '../native/ported/motion/locomotion/b2/native-motion.ts';
+import { advanceNativeMotion, createNativeMotionState, nativeFeet, type NativeMotionState, type NativeMotionTuning } from '../native/ported/motion/locomotion/b2/native-motion.ts';
 import type { MotionEvent } from '../native/ported/motion/locomotion/motion.ts';
 import { resolveNativeCamera, type CameraProjection, type NativeCameraResult, type ViewMode } from '../native/ported/motion/controls/b2/native-camera.ts';
 import { nativeNear } from '../native/body-profile.ts';
@@ -15,7 +17,7 @@ import { resolveFirstPersonPoseRebind } from './first-person-rebind.ts';
 
 /** Existing game assumptions, not measured species flight/mass/lift data. */
 export const SHARED_GAME_TUNING = Object.freeze({ walkSpeed: .9, flightSpeed: 12, glideSpeed: 15 });
-export interface CandidateView { readonly mode: ViewMode; readonly verticalFovDegrees: number; readonly aspect: number }
+export interface CandidateView { readonly mode: ViewMode; readonly verticalFovDegrees: number; readonly aspect: number; readonly orbit?: CameraOrbitAngles }
 export interface SpeciesCursor { readonly lastFrame:number; readonly batchSequence:number; readonly seq:number }
 export interface CandidateDependencies extends AssetDependencies {
   readonly near?: typeof nativeNear;
@@ -70,7 +72,7 @@ export interface SpeciesSwap {
   commit(): void;
   cancel(): void;
 }
-const surfaces = new Set<SurfaceId>(['stone','granite','asphalt','wood','metal','roof-tile','water','glass','soil','paving','grass']);
+const surfaces = new Set<SurfaceId>(['stone','granite','asphalt','wood','metal','roof-tile','water','glass','soil','paving','grass','cloud']);
 const point = ([x,y,z]: readonly number[]): Vec3 => ({x,y,z});
 const sameAppearance = (a: Appearance,b: Appearance) => a.speciesId===b.speciesId&&a.skinId===b.skinId;
 const copyState = (s: NativeMotionState): NativeMotionState => ({...s, support:s.support?{...s.support,normal:{...s.support.normal}}:null});
@@ -150,7 +152,7 @@ export function createSpeciesActor(parent: THREE.Object3D, options: SpeciesOptio
   function apply(target: BirdAsset,candidate: NativeMotionState,nextPose: BirdPoseInput): Vec3 {
     const placement=toNativeBirdRootPlacement(candidate,candidate.body);
     target.rig.root.position.set(placement.position.x,placement.position.y,placement.position.z);
-    target.rig.root.rotation.set(0,placement.yaw,0);
+    target.rig.root.rotation.set(0,placement.yaw,nextPose.roll ?? 0, 'YXZ');
     target.rig.pose(nextPose);target.rig.root.updateMatrixWorld(true);
     const sampled=target.rig.getEyeWorldPosition(new THREE.Vector3());
     if(![sampled.x,sampled.y,sampled.z].every(Number.isFinite))fail('invalid-posed-eye');
@@ -169,7 +171,7 @@ export function createSpeciesActor(parent: THREE.Object3D, options: SpeciesOptio
   function resolve(candidate: NativeMotionState,nextView: CandidateView,nextProjection: CameraProjection,seconds: number,nextEye: Vec3,reducedMotion: boolean,previous?:readonly[number,number,number]): ResolvedCamera {
     const body=candidate.body;
     const result=(dependencies.camera??resolveNativeCamera)({bird:candidate,mode:nextView.mode,world,projection:nextProjection,
-      acceptedSeconds:seconds,previousPosition:previous,posedEyeWorld:nextEye,reducedMotion,
+      acceptedSeconds:seconds,previousPosition:previous,posedEyeWorld:nextEye,reducedMotion,orbit:nextView.orbit,
       metrics:cameraMetrics(body)});
     if(result.kind==='blocked')fail('camera:'+result.reason);
     if(nextView.mode==='first'&&Math.hypot(result.position[0]-nextEye.x,result.position[1]-nextEye.y,result.position[2]-nextEye.z)>1e-6)
@@ -183,8 +185,8 @@ export function createSpeciesActor(parent: THREE.Object3D, options: SpeciesOptio
       const copy=Object.freeze({...event,position:Object.freeze({...event.position})});
       let contact: NativeSupport|null=null;
       if(event.type==='step'||event.type==='land'){
-        const value=world.supportAt({at:event.position,previousFeetY:event.position.y,footRadiusM:candidate.body.footSupportRadiusM,
-          heightM:candidate.body.heightM,maxRiseM:.000002,maxDropM:.000002,layerId:candidate.support?.layerId});
+        const value=(world.supportAtTime??world.supportAt)({at:event.position,previousFeetY:event.position.y,footRadiusM:candidate.body.footSupportRadiusM,
+          heightM:candidate.body.heightM,maxRiseM:.000002,maxDropM:.000002,layerId:candidate.support?.layerId},event.time);
         if(value===undefined||(value!==null&&!validSupport(value)))fail('unverified-event-contact');
         contact=value;
         if(event.type==='land'&&!contact?.landable)fail('unverified-land-contact');
@@ -205,9 +207,10 @@ export function createSpeciesActor(parent: THREE.Object3D, options: SpeciesOptio
 
   try{
     const initial=options.initialState;
-    state=initial?createNativeMotionState({bird:{...initial,y:nativeFeet(initial).y+asset.body.centreToSoleM},body:asset.body,tuning:initial.tuning,
+    state=initial?createNativeMotionState({canHover:asset.appearance.speciesId==='kestrel',shortTapHeightRatio:asset.appearance.speciesId==='pigeon'?.5:1,bird:{...initial,y:nativeFeet(initial).y+asset.body.centreToSoleM},body:asset.body,tuning:initial.tuning,
       sourceId:initial.sourceId,time:initial.time,nextEventSequence:initial.nextEventSequence}):
-      createNativeMotionState({body:asset.body,tuning:SHARED_GAME_TUNING,feet:options.feet??{x:0,y:0,z:0},sourceId:actorId});
+      createNativeMotionState({canHover:asset.appearance.speciesId==='kestrel',shortTapHeightRatio:asset.appearance.speciesId==='pigeon'?.5:1,body:asset.body,tuning:SHARED_GAME_TUNING,feet:options.feet??{x:0,y:0,z:0},sourceId:actorId});
+    if(initial)state.knockbackSeconds=initial.knockbackSeconds??0;
     if(landedAt!==undefined&&(!Number.isFinite(landedAt)||landedAt>state.time||landedAt<0))fail('invalid-landing-time');
     placement(state);pose=toBirdPoseInput(state,{simTime:state.time,landedAt,calledAt});
     eye=apply(asset,state,pose);projection=lens(state.body,view);camera=resolve(state,view,projection,0,eye,false);
@@ -225,9 +228,9 @@ export function createSpeciesActor(parent: THREE.Object3D, options: SpeciesOptio
       if(sameAppearance(appearance,asset.appearance)&&lod===asset.lod)return{kind:'unchanged'};
       next=buildNativeAppearance(appearance,lod,dependencies);
       const body=sameAppearance(appearance,currentAppearance)?currentState.body:next.body;
-      const candidate=createNativeMotionState({bird:{...currentState,y:nativeFeet(currentState).y+body.centreToSoleM},body,
+      const candidate=createNativeMotionState({canHover:appearance.speciesId==='kestrel',shortTapHeightRatio:appearance.speciesId==='pigeon'?.5:1,bird:{...currentState,y:nativeFeet(currentState).y+body.centreToSoleM},body,
         tuning:currentState.tuning,sourceId:currentState.sourceId,time:currentState.time,nextEventSequence:currentState.nextEventSequence});
-      candidate.support=currentState.support;
+      candidate.support=currentState.support;candidate.knockbackSeconds=currentState.knockbackSeconds;
       placement(candidate);
       const nextEye=apply(next,candidate,currentPose),nextProjection=lens(body,currentView);
       if(options.hideInFirstPerson)next.rig.root.visible=currentView.mode!=='first';
@@ -235,7 +238,7 @@ export function createSpeciesActor(parent: THREE.Object3D, options: SpeciesOptio
       const nextOperation=currentView.mode==='first'?'appearance-rebind':'third-person-appearance';
       if(currentView.mode==='first'){
         const rebound=resolveFirstPersonPoseRebind({reason:'appearance-rebind',bird:candidate,metrics:cameraMetrics(body),world,
-          projection:nextProjection,previousPosition:currentCamera.position,posedEyeWorld:nextEye,reducedMotion:currentPose.reducedMotion??false});
+          projection:nextProjection,previousPosition:currentCamera.position,posedEyeWorld:nextEye,reducedMotion:currentPose.reducedMotion??false,orbit:currentView.orbit});
         if(rebound.kind==='blocked')fail(rebound.reason);
         nextCamera=rebound.camera;
       }else nextCamera=resolve(candidate,currentView,nextProjection,0,nextEye,currentPose.reducedMotion??false,currentCamera.position);
@@ -265,12 +268,14 @@ export function createSpeciesActor(parent: THREE.Object3D, options: SpeciesOptio
     prepareAppearance,
     prepareLegacy(look: 'pigeon'|'white'|'owl',lod: BirdLod=asset.lod){try{return prepareAppearance(appearanceForLegacy(look),lod);}catch(error){return{kind:'blocked' as const,reason:reason(error)};}},
     prepareLod(lod: BirdLod){return prepareAppearance(asset.appearance,lod);},
-    prepareFrame(context: FrameContext,input: Readonly<FlightInput>,nextView: CandidateView=view,callTime: number|undefined=calledAt): SpeciesFrame|Blocked {
+    prepareFrame(context: FrameContext,input: Readonly<FlightInput>,nextView: CandidateView=view,callTime: number|undefined=calledAt,peckAge=Infinity,opponentPeckAge=Infinity,flirtAge=Infinity,nextTuning:NativeMotionTuning=state.tuning): SpeciesFrame|Blocked {
       if(disposed)return{kind:'blocked',reason:'disposed'};
       // A post-commit callback may change appearance at the adopted time, but it
       // cannot advance time before the external clock/input owner returns.
       if(finalizing)return{kind:'blocked',reason:'commit-finalization-in-progress'};
-      const before=version,currentAsset=asset,currentState=state,proposedView=Object.freeze({...nextView});
+      const before=version,currentAsset=asset,currentState=state;
+      let proposedView=Object.freeze({...nextView,
+        ...(nextView.orbit ? {orbit:Object.freeze({...nextView.orbit})} : {})});
       context=Object.freeze({...context});
       const seconds=context.acceptedSeconds;
       if(context.contractVersion!==1||!context.playing||typeof context.reducedMotion!=='boolean'||
@@ -279,18 +284,22 @@ export function createSpeciesActor(parent: THREE.Object3D, options: SpeciesOptio
         !Number.isFinite(context.simTime)||Math.abs(context.simTime-currentState.time-seconds)>1e-8)return{kind:'blocked',reason:'invalid-or-inactive-frame'};
       try{
         identityParent(parent);
-        const motion=advanceNativeMotion(currentState,input,seconds,world);
+        const scaleRatio=(nextTuning.movementScale??1)/(currentState.tuning.movementScale??1);
+        const motion=advanceNativeMotion({...currentState,vx:currentState.vx*scaleRatio,vy:currentState.vy*scaleRatio,vz:currentState.vz*scaleRatio,tuning:Object.freeze({...nextTuning})},input,seconds,world);
         if(motion.status!=='advanced'||motion.acceptedSeconds!==seconds)fail('motion:'+(motion.status==='blocked'?motion.reason:motion.status));
+        if(Number.isFinite(input.moveHeading)) proposedView=Object.freeze({...proposedView,orbit:Object.freeze(rebaseCameraOrbit(proposedView.orbit??{yaw:0,pitch:null},currentState.heading,motion.state.heading))});
         let nextLandedAt=landedAt;for(const event of motion.events)if(event.type==='land')nextLandedAt=event.time;
         if(callTime!==undefined&&(!Number.isFinite(callTime)||callTime<0||callTime>motion.state.time))fail('invalid-call-time');
-        const nextPose=toBirdPoseInput(motion.state,{simTime:motion.state.time,landedAt:nextLandedAt,calledAt:callTime,reducedMotion:context.reducedMotion});
+        const priorRoll=pose.roll ?? 0;
+        const nextRoll=motion.state.grounded ? 0 : priorRoll + Math.max(-1,Math.min(1,input.roll ?? 0))*1.8*seconds;
+        const nextPose={...toBirdPoseInput(motion.state,{simTime:motion.state.time,landedAt:nextLandedAt,calledAt:callTime,reducedMotion:context.reducedMotion}),foldedFall:input.descend && !motion.state.grounded,peckAge,opponentPeckAge,flirtAge,roll:nextRoll};
         const eventStage=eventPreview(motion.events,motion.state,asset.appearance);
         const nextProjection=lens(motion.state.body,proposedView);
         let nextEye: Vec3,nextCamera: ResolvedCamera;
-        const transforms: {object:THREE.Object3D;position:THREE.Vector3;quaternion:THREE.Quaternion;scale:THREE.Vector3;matrix:THREE.Matrix4}[]=[];
+        const transforms: {object:THREE.Object3D;position:THREE.Vector3;quaternion:THREE.Quaternion;scale:THREE.Vector3;matrix:THREE.Matrix4;morph?:number[]}[]=[];
         try{
           nextEye=apply(currentAsset,motion.state,nextPose);nextCamera=resolve(motion.state,proposedView,nextProjection,seconds,nextEye,context.reducedMotion,camera.position);
-          currentAsset.rig.root.traverse(object=>transforms.push({object,position:object.position.clone(),quaternion:object.quaternion.clone(),scale:object.scale.clone(),matrix:object.matrix.clone()}));
+          currentAsset.rig.root.traverse(object=>transforms.push({object,position:object.position.clone(),quaternion:object.quaternion.clone(),scale:object.scale.clone(),matrix:object.matrix.clone(),...(object instanceof THREE.Mesh && object.morphTargetInfluences ? {morph:[...object.morphTargetInfluences]} : {})}));
         }finally{if(!disposed&&asset===currentAsset)apply(currentAsset,state,pose);}
         if(disposed||version!==before)fail('stale-species-during-preview');
         const frame=context.frame;let used=false;
@@ -300,7 +309,7 @@ export function createSpeciesActor(parent: THREE.Object3D, options: SpeciesOptio
             if(!isCurrent())fail('stale-species-frame');used=true;const retired=invalidatePending();
             // Commit the already validated pose transforms; no posing/collision
             // query is rerun after the external input/clock owner accepts this ticket.
-            for(const t of transforms){t.object.position.copy(t.position);t.object.quaternion.copy(t.quaternion);t.object.scale.copy(t.scale);t.object.matrix.copy(t.matrix);t.object.matrixWorldNeedsUpdate=true;}
+            for(const t of transforms){t.object.position.copy(t.position);t.object.quaternion.copy(t.quaternion);t.object.scale.copy(t.scale);t.object.matrix.copy(t.matrix);t.object.matrixWorldNeedsUpdate=true;if(t.morph && t.object instanceof THREE.Mesh)t.object.morphTargetInfluences=[...t.morph];}
             currentAsset.rig.root.updateMatrixWorld(true);
             if(options.hideInFirstPerson)currentAsset.rig.root.visible=proposedView.mode!=='first';
             state=motion.state;pose=nextPose;eye=nextEye;camera=nextCamera;projection=nextProjection;view={...proposedView};

@@ -1,3 +1,4 @@
+import { makeRealMapLayout, realGround, realWater, realSpawnClear } from './real-map/layout.ts';
 import { BOUNDS } from '../../../simulation.ts';
 import type { BuildingSpec, GroundProbe, GroundSample, LandingSurface, MapCollider, MapLayout, MapOptions, MapPoint, MapRect, NavNode, RoofSpec, SurfaceKind, WaterContact } from './contracts.ts';
 
@@ -17,6 +18,7 @@ export const ROOF_ROWS = 12;
 export const ROOF_RENDER_SEGMENTS = 24;
 
 export function sejongRoad(layout:MapLayout):{width:number;minX:number;maxX:number;laneCentres:number[]}{
+  if(layout.realMap)return{width:0,minX:0,maxX:0,laneCentres:[]};
   const reference=layout.proportions==='reference-scale';const width=reference?30:52;
   return{width,minX:34-width/2,maxX:34+width/2,laneCentres:reference?Array.from({length:8},(_,i)=>34+(i-3.5)*3.25):[17,29,43,55]};
 }
@@ -40,6 +42,7 @@ export function roofMeshHeight(roof:RoofSpec,u:number,v:number):number{
 }
 
 export function makeMapLayout(options: MapOptions = {}): MapLayout {
+  if(options.data==='osm')return makeRealMapLayout(options);
   const terrain = options.terrain ?? 'flat-compatible';
   const sunken = terrain === 'sunken-channel';
   const layout: MapLayout = {
@@ -198,6 +201,7 @@ function navigation(layout: MapLayout): void {
 
 /** Base terrain only; roofs and props are separate landing surfaces/colliders. */
 export function sampleGround(layout: MapLayout, x: number, z: number, probe?: GroundProbe): GroundSample {
+  if(layout.realMap)return realGround(layout,x,z);
   const { minX, maxX, excavationMinZ: north, excavationMaxZ: south } = RIVER;
   if (x >= minX && x <= maxX) {
     if (BRIDGES.some(bx => Math.abs(x - bx) <= 5.8) && z >= north && z <= south && (!probe || 0 <= probe.feetY + (probe.maxStep ?? 0.25))) return { y: 0, surface: 'stone', walkable: true, zone: 'bridge' };
@@ -217,6 +221,7 @@ export function sampleGround(layout: MapLayout, x: number, z: number, probe?: Gr
 
 /** y is feet height. No arbitrary river-depth movement or buoyancy is imposed here. */
 export function sampleWater(layout: MapLayout, x: number, y: number, z: number): WaterContact | null {
+  if(layout.realMap)return realWater(layout,x,y,z);
   const w = layout.water;
   if (![x, y, z].every(Number.isFinite)) return null;
   if (x < w.minX || x > w.maxX || z < w.minZ || z > w.maxZ || y > w.y + (layout.terrain==='flat-compatible'?0.12:0.02) || y < w.bedY - 0.1) return null;
@@ -225,6 +230,7 @@ export function sampleWater(layout: MapLayout, x: number, y: number, z: number):
   return { id: w.id, y: w.y, depth: Math.max(0, w.y - y), current: { x: w.flowX * w.flowSpeed, z: w.flowZ * w.flowSpeed } };
 }
 export function isSpawnClear(layout: MapLayout, point: MapPoint, radius = 1.2, height = 2): boolean {
+  if(layout.realMap)return realSpawnClear(layout,point,radius,height);
   if (![point.x, point.y, point.z, radius, height].every(Number.isFinite) || radius < 0 || height <= 0) return false;
   if (point.x - radius < BOUNDS.minX || point.x + radius > BOUNDS.maxX || point.z - radius < BOUNDS.minZ || point.z + radius > BOUNDS.maxZ) return false;
   const ground = sampleGround(layout, point.x, point.z, { feetY: point.y, height });

@@ -1,7 +1,7 @@
 import type { Appearance, SpeciesId } from '../native/ported/shared-contracts.ts';
 import type { BirdLod } from '../native/ported/birds/rig-core/contract.ts';
 
-export const SPECIES: readonly SpeciesId[] = Object.freeze(['pigeon', 'sparrow', 'crow', 'magpie', 'tawny-owl', 'eagle-owl', 'kestrel']);
+export const SPECIES: readonly SpeciesId[] = Object.freeze(['pigeon', 'sparrow', 'crow', 'magpie', 'tawny-owl', 'eagle-owl', 'kestrel', 'heron']);
 const appearances: Appearance[] = [
   { speciesId: 'pigeon', skinId: 'gray' }, { speciesId: 'pigeon', skinId: 'white' },
   ...SPECIES.filter(s => s !== 'pigeon').map(speciesId => ({ speciesId, skinId: 'default' as const })),

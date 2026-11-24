@@ -23,7 +23,7 @@ after(()=>fs.writeFileSync('evidence/app-integration-cases.json',JSON.stringify(
 test('actual scene uses all seven internal species IDs and one combined canonical owner while NPC time follows accepted frames',()=>{
   const s=createNativeScene(new THREE.Scene(),'pigeon',{quality:'mobile',sessionId:'app-species'});try{
     const ids=[];for(const a of APPEARANCES){assert.equal(s.selectAppearance(a),true);const before=s.snapshot(),v=step(s,.1,{...idle,flapPressed:true,flapHeld:true});const flap=v.events.find(e=>e.type==='flap');assert.equal(flap.speciesId,a.speciesId);ids.push(flap.id);assert.equal(flap.batchSequence,v.batchSequence);assert.equal(v.core.sequence,0);assert.equal(v.core.batch,0);assert.equal(v.npcs.acceptedCommits,before.npcs.acceptedCommits+1);near(v.npcs.lastClock.simTime,v.state.time);if(!['pigeon','eagle-owl'].includes(a.speciesId))assert.equal(s.look,null);coherent(s);}
-    assert.equal(new Set(ids).size,8);assert.equal(s.snapshot().batchSequence,8);reports.push({case:'seven-species-canonical-app',flaps:ids.length,npcCommits:s.snapshot().npcs.acceptedCommits,time:s.state.time});
+    assert.equal(new Set(ids).size,9);assert.equal(s.snapshot().batchSequence,9);reports.push({case:'eight-species-canonical-app',flaps:ids.length,npcCommits:s.snapshot().npcs.acceptedCommits,time:s.state.time});
   }finally{s.dispose();}
 });
 

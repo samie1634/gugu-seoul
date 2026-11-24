@@ -3,7 +3,7 @@
  * Producer APIs are adapted by the sole integration owner. No producer source is edited here.
  * One unit = one real metre; +Y up, +X east, -Z north; heading zero faces -Z.
  */
-export type SpeciesId = 'pigeon' | 'sparrow' | 'crow' | 'magpie' | 'tawny-owl' | 'eagle-owl' | 'kestrel';
+export type SpeciesId = 'pigeon' | 'sparrow' | 'crow' | 'magpie' | 'tawny-owl' | 'eagle-owl' | 'kestrel' | 'heron';
 export type SkinId = 'default' | 'gray' | 'white';
 export type Appearance =
   | { readonly speciesId: 'pigeon'; readonly skinId: 'default' | 'gray' | 'white' }
@@ -13,7 +13,7 @@ export type AppearanceId = 'pigeon-gray' | 'pigeon-white' | Exclude<SpeciesId, '
 export type BirdMode = 'rest' | 'walk' | 'flap' | 'glide' | 'fall';
 export type NpcKind = 'human' | 'dog' | 'cat' | 'rat';
 export type NpcAction = 'idle' | 'walk' | 'look' | 'avoid' | 'startle';
-export type SurfaceId = 'stone' | 'granite' | 'asphalt' | 'wood' | 'metal' | 'roof-tile' | 'water' | 'glass' | 'soil' | 'paving' | 'grass';
+export type SurfaceId = 'stone' | 'granite' | 'asphalt' | 'wood' | 'metal' | 'roof-tile' | 'water' | 'glass' | 'soil' | 'paving' | 'grass' | 'cloud';
 export interface Vec2 { readonly x: number; readonly z: number }
 export interface Vec3 extends Vec2 { readonly y: number }
 
@@ -152,8 +152,8 @@ export type SceneEvent = EventBase & (
   | { readonly type: 'bird-call'; readonly speciesId: SpeciesId; readonly cause: 'manual' | 'walk-auto' }
   | { readonly type: 'land'; readonly surface: SurfaceId; readonly supportId: string; readonly impactSpeed: number }
   | { readonly type: 'footstep'; readonly surface: SurfaceId; readonly strength: number }
-  | { readonly type: 'npc-reaction'; readonly targetId: string; readonly kind: NpcKind; readonly response: 'look' | 'startle' }
-  | { readonly type: 'npc-audio'; readonly kind: NpcKind; readonly cue: 'footstep' | 'rustle' | 'human-gasp' | 'dog-bark' | 'cat-mew' | 'rat-squeak'; readonly gain: number; readonly surface: SurfaceId }
+  | { readonly type: 'npc-reaction'; readonly targetId: string; readonly kind: NpcKind; readonly response: 'look' | 'startle' | 'duck' }
+  | { readonly type: 'npc-audio'; readonly kind: NpcKind; readonly cue: 'footstep' | 'rustle' | 'human-gasp' | 'human-scream' | 'dog-bark' | 'cat-mew' | 'rat-squeak'; readonly gain: number; readonly surface: SurfaceId }
   | { readonly type: 'surface-contact' | 'water-enter' | 'water-exit' | 'prop-perch'; readonly targetId: string; readonly surface: SurfaceId; readonly strength: number }
   | { readonly type: 'unlock'; readonly appearanceId: AppearanceId; readonly activeSeconds: number }
 );

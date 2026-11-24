@@ -47,8 +47,8 @@ function tracked(){
 const measurements=[],reproductions=[];
 after(()=>{fs.mkdirSync('evidence',{recursive:true});fs.writeFileSync('evidence/measurements.json',JSON.stringify({recordedAtUTC:new Date().toISOString(),scope:'CPU model geometry, not bird biology or rendered play.',measurements},null,2)+'\n');fs.writeFileSync('evidence/legacy-reproductions.json',JSON.stringify({recordedAtUTC:new Date().toISOString(),reproductions},null,2)+'\n');});
 
-test('strict seven-species identity, pigeon skins and eagle-owl legacy alias never silently fall back',()=>{
-  assert.equal(SPECIES.length,7);assert.equal(APPEARANCES.length,8);assert.equal(new Set(APPEARANCES.map(a=>a.speciesId)).size,7);
+test('strict eight-species identity, pigeon skins and eagle-owl legacy alias never silently fall back',()=>{
+  assert.equal(SPECIES.length,8);assert.equal(APPEARANCES.length,9);assert.equal(new Set(APPEARANCES.map(a=>a.speciesId)).size,8);
   assert.deepEqual(appearanceForLegacy('white'),{speciesId:'pigeon',skinId:'white'});assert.deepEqual(appearanceForLegacy('owl'),owl);assert.equal(owl.speciesId,'eagle-owl');
   assert.deepEqual(normalizeAppearance({speciesId:'pigeon',skinId:'default'}),pigeon);
   for(const value of [null,{},'crow',{speciesId:'owl',skinId:'default'},{speciesId:'crow',skinId:'white'},{speciesId:'sparrow',skinId:'gray'},{speciesId:'pigeon',skinId:'unknown'}])assert.throws(()=>normalizeAppearance(value));

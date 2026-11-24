@@ -26,8 +26,9 @@ function setup() {
   document.hidden = false; document.focused = true; document.hasFocus = () => document.focused;
   globalThis.Element = FakeElement;
   const joystick = new FakeElement(); const flap = new FakeElement(); const descend = new FakeElement();
-  const controls = new Controls(joystick, flap, descend); controls.enabled = true;
-  return { controls, joystick, flap, descend };
+  const peck = new FakeElement();
+  const controls = new Controls(joystick, flap, descend, peck); controls.enabled = true;
+  return { controls, joystick, flap, descend, peck };
 }
 function key(type, code, repeat = false, fromDialog = false) {
   const event = new Event(type, { cancelable: true }); Object.assign(event, { code, repeat });
@@ -156,12 +157,12 @@ test('modal commands commit their input state before synchronous gate and fresh-
   assert.equal(key('keydown', 'Escape').defaultPrevented, true);
   assert.equal(pauses, 1); assert.equal(game.flap.captured.size, 0); assert.equal(game.controls.sample().forward, 0);
   key('keydown', 'Escape', true); key('keydown', 'Escape');
-  key('keydown', 'Space', false, true); key('keydown', 'KeyC', false, true); key('keydown', 'KeyV', false, true);
+  key('keydown', 'Space', false, true); key('keydown', 'KeyF', false, true); key('keydown', 'KeyV', false, true);
   assert.equal(pauses, 1); assert.equal(coos + views, 0);
   key('keyup', 'Escape'); key('keydown', 'Escape', false, true);
   assert.equal(pauses, 2); assert.equal(game.controls.sample().flapPressed, true);
   assert.equal(game.controls.sample().flapPressed, false);
-  key('keydown', 'KeyC'); key('keydown', 'KeyC'); key('keydown', 'KeyV'); key('keydown', 'KeyV', true);
+  key('keydown', 'KeyF'); key('keydown', 'KeyF'); key('keydown', 'KeyV'); key('keydown', 'KeyV', true);
   assert.equal(coos, 1); assert.equal(views, 1);
 });
 
@@ -214,4 +215,51 @@ test('source input keeps original hold-to-glide behavior with one flap per aggre
   assert.equal(game.bird.flaps, 1); assert.equal(game.bird.mode, 'glide');
   key('keyup', 'Space'); pointer(game.flap, 'pointercancel', 1); game.frame(527); assert.equal(game.bird.mode, 'glide');
   pointer(game.flap, 'pointerup', 2); assert.equal(game.frame(544).input.flapHeld, false);
+});
+
+
+test('mobile peck routes one complete tap to the same callback as R without flap impulses', () => {
+  const { controls, peck } = setup(); let hits = 0; controls.onPeck = () => hits++;
+  pointer(peck, 'pointerdown', 20); assert.equal(hits, 0);
+  pointer(peck, 'pointerup', 20); assert.equal(hits, 1);
+  peck.dispatchEvent(Object.assign(new Event('click', { cancelable: true }),{detail:1,pointerId:20})); assert.equal(hits, 1);
+  key('keydown', 'KeyR'); assert.equal(hits, 2);
+  assert.equal(controls.sample().flapPressed, false); assert.equal(peck.captured.size, 0);
+});
+test('mobile peck preserves simultaneous steering, wing hold and camera pointer ownership', () => {
+  const { controls, joystick, flap, peck } = setup(); let hits = 0; controls.onPeck = () => hits++;
+  pointer(joystick, 'pointerdown', 1, 80, 20); pointer(flap, 'pointerdown', 2);
+  const before = controls.sample(); peck.dispatchEvent(new Event('click'));
+  const after = controls.sample(); assert.equal(hits, 1);
+  assert.equal(after.forward, before.forward); assert.equal(after.turn, before.turn);
+  assert.equal(after.flapHeld, true); assert.equal(after.flapPressed, false);
+  assert.deepEqual([...joystick.captured], [1]); assert.deepEqual([...flap.captured], [2]); assert.equal(peck.captured.size, 0);
+});
+test('mobile peck respects start, pause, dialog, visibility and focus gates without queued attacks', () => {
+  const { controls, peck } = setup(); let hits = 0; controls.onPeck = () => hits++;
+  for (const change of [{ enabled: false }, { paused: true }, { dialogOpen: true }, { hidden: true }, { focused: false }]) {
+    controls.setGate({ ...activeGate, ...change }); peck.dispatchEvent(new Event('click')); assert.equal(hits, 0);
+  }
+  controls.setGate(activeGate); controls.sample(); assert.equal(hits, 0);
+  peck.dispatchEvent(new Event('click')); assert.equal(hits, 1);
+});
+
+test('mobile release and WebKit click fallback never double peck or flap, including capture failure', () => {
+  const {controls,peck,flap}=setup(); let hits=0; controls.onPeck=()=>hits++;
+  const click = (el,id) => el.dispatchEvent(Object.assign(new Event('click',{cancelable:true}),{detail:1,pointerId:id}));
+  pointer(flap,'pointerdown',40);
+  assert.equal(controls.sample().flapPressed,true);
+  pointer(flap,'pointerup',40); click(flap,40);
+  assert.equal(controls.sample().flapPressed,false,'completed pointer does not double flap');
+  flap.failCapture.add(41); pointer(flap,'pointerdown',41); pointer(flap,'pointerup',41);
+  assert.equal(controls.sample().flapPressed,false,'capture loss is not a flap');
+  click(flap,41);
+  assert.equal(controls.sample().flapPressed,true,'real click activates even after failed capture');
+  assert.equal(controls.sample().flapPressed,false);
+  peck.failCapture.add(42); pointer(peck,'pointerdown',42); pointer(peck,'pointerup',42); assert.equal(hits,0);
+  click(peck,42); assert.equal(hits,1);
+  pointer(peck,'pointerdown',43); pointer(peck,'pointercancel',43); assert.equal(hits,1);
+  flap.dispatchEvent(new Event('click')); assert.equal(controls.sample().flapPressed,true,'assistive click can flap');
+  controls.setGate({...activeGate,hidden:true}); click(flap,44); click(peck,45);
+  assert.equal(controls.sample().flapPressed,false); assert.equal(hits,1);
 });

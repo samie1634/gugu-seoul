@@ -46,6 +46,7 @@ export function createMapMaterials(layout?:MapLayout): Record<MaterialKey, THREE
   const material = (name: MaterialKey, roughness: number, metalness = 0) => {
     const m = new THREE.MeshStandardMaterial({ vertexColors: true, roughness, metalness });
     m.name = `map:${name}`;
+    if(name==='glass'){m.transparent=true;m.opacity=0.34;m.depthWrite=false;m.side=THREE.DoubleSide;}
     if(name==='roof')m.side=THREE.DoubleSide;
     if (name !== 'glass' && name !== 'metal' && name !== 'foliage') {
       m.onBeforeCompile = shader => {
@@ -68,7 +69,8 @@ export function createMapMaterials(layout?:MapLayout): Record<MaterialKey, THREE
               float tiles = sin(vMapWorld.x * 13.5)*tileFade;
               diffuseColor.rgb *= 0.985 + tiles * 0.045;
             ` : name === 'wood' ? `
-              diffuseColor.rgb *= 0.97 + 0.025 * sin(vMapWorld.x * 8.0 + sin(vMapWorld.y * 2.0));
+              float bark = sin(vMapWorld.x * 22.0 + sin(vMapWorld.y * 0.8) * 1.4) * sin(vMapWorld.z * 18.0 + vMapWorld.y * 0.5);
+              diffuseColor.rgb *= 0.94 + 0.07 * bark * grainFade;
             ` : ''}`);
       };
       m.customProgramCacheKey = () => `gugu-map-original-${name}-${layout?.proportions??'reference-scale'}-v3`;

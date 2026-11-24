@@ -17,11 +17,14 @@ export class Controls {
   });
   private capturedPointers = new Map<number, { element: HTMLElement; control: TouchControl }>();
   private readonly thumb: HTMLElement;
+  private pointerClicks = new Map<'peck'|'flap', { id: number; expires: number }>();
   onCoo = () => {};
+  onPeck = () => {};
+  onFlirt = () => {};
   onView = () => {};
   onPause = () => {};
 
-  constructor(joystick: HTMLElement, flap: HTMLElement, descend: HTMLElement) {
+  constructor(joystick: HTMLElement, flap: HTMLElement, descend: HTMLElement, peck?: HTMLElement) {
     this.thumb = joystick.querySelector<HTMLElement>('.stick-thumb')!;
     window.addEventListener('keydown', event => this.send({
       type: 'key-down', code: event.code, repeat: event.repeat,
@@ -43,13 +46,29 @@ export class Controls {
         catch { this.send({ type: 'pointer-cancel', id: event.pointerId, control }); }
       });
       for (const type of ['pointerup', 'pointercancel', 'lostpointercapture'] as const) {
-        element.addEventListener(type, event => this.send({
-          type: type === 'pointerup' ? 'pointer-up' : type === 'pointercancel' ? 'pointer-cancel' : 'lost-pointer-capture',
-          id: event.pointerId, control,
-        }));
+        element.addEventListener(type, event => {
+          if (type === 'pointerup' && (control === 'peck' || control === 'flap') &&
+            this.state.pointers.some(owner => owner.id === event.pointerId && owner.control === control)) {
+            this.pointerClicks.set(control, { id: event.pointerId, expires: performance.now() + 600 });
+          }
+          this.send({ type: type === 'pointerup' ? 'pointer-up' : type === 'pointercancel' ? 'pointer-cancel' : 'lost-pointer-capture',
+            id: event.pointerId, control });
+        });
       }
     };
-    bind(joystick, 'stick'); bind(flap, 'flap'); bind(descend, 'descend');
+    bind(joystick, 'stick'); bind(flap, 'flap'); bind(descend, 'descend'); if (peck) bind(peck, 'peck');
+    // Prefer an owned pointer release. WebKit may deliver only a normal click
+    // after capture failed; keyboard/assistive buttons also use this path.
+    const bindTapFallback = (element: HTMLElement, control: 'peck'|'flap') => element.addEventListener('click', event => {
+      const previous = this.pointerClicks.get(control);
+      const pointerId = (event as PointerEvent).pointerId;
+      const samePointer = Number.isFinite(pointerId) && pointerId > 0 ? pointerId === previous?.id : event.detail > 0;
+      if (previous && (samePointer || performance.now() > previous.expires)) this.pointerClicks.delete(control);
+      if (previous && samePointer && performance.now() <= previous.expires) return;
+      this.send({ type: control === 'peck' ? 'peck-tap' : 'flap-tap' }, event);
+    });
+    if (peck) bindTapFallback(peck, 'peck');
+    bindTapFallback(flap, 'flap');
     joystick.addEventListener('pointermove', event => this.send({
       type: 'pointer-move', id: event.pointerId, axes: this.axes(joystick, event),
     }, event));
@@ -94,6 +113,8 @@ export class Controls {
     if (result.preventDefault) domEvent?.preventDefault();
     this.syncPointers();
     if (result.command === 'coo') this.onCoo();
+    else if (result.command === 'peck') this.onPeck();
+    else if (result.command === 'flirt') this.onFlirt();
     else if (result.command === 'view') this.onView();
     else if (result.command === 'pause') this.onPause();
     return result;

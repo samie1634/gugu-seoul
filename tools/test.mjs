@@ -11,7 +11,7 @@ fs.mkdirSync(path.join(output, 'evidence'), { recursive: true });
 const tests = ['tests', 'tests/core'].flatMap(directory =>
   fs.readdirSync(path.join(root, directory)).filter(name => name.endsWith('.test.mjs')).sort()
     .map(name => path.join(root, directory, name)));
-const result = spawnSync(process.execPath, ['--test', ...tests], {
+const result = spawnSync(process.execPath, ['--test', '--test-concurrency=4', ...tests], {
   cwd: output, stdio: 'inherit', windowsHide: true,
 });
 if (result.error) throw result.error;

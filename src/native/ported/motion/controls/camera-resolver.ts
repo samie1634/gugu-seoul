@@ -1,5 +1,6 @@
 import type { BodyProfile } from '../../shared-contracts.ts';
 import type { BirdState, Obstacle } from '../../../../simulation.ts';
+import { birdOrbitPosition, orbitViewDirection, stableOrbitStep, validCameraOrbit, type CameraOrbitAngles } from '../../../../camera-orbit.ts';
 
 export type Vec3 = readonly [x: number, y: number, z: number];
 export type CameraBird = Readonly<Pick<BirdState, 'x' | 'y' | 'z' | 'heading' | 'vy' | 'grounded'>>;
@@ -57,6 +58,7 @@ export interface CameraRequest {
   readonly metrics?: BirdViewMetrics;
   readonly projection?: CameraProjection;
   readonly reducedMotion?: boolean;
+  readonly orbit?: CameraOrbitAngles;
 }
 
 export type CameraResult =
@@ -160,11 +162,11 @@ function findAnchor(centre: Vec3, radius: number, space: Space): Vec3 | null {
 
 export function resolveCamera({
   bird, mode, obstacles, dt, previousPosition, firstPersonEyeWorld, metrics = LEGACY_BIRD_VIEW,
-  projection = LEGACY_CAMERA_PROJECTION, reducedMotion = false,
+  projection = LEGACY_CAMERA_PROJECTION, reducedMotion = false, orbit,
 }: CameraRequest): CameraResult {
   const centre: Vec3 = [bird.x, bird.y, bird.z];
   const radius = cameraNearRadius(projection);
-  if (!finiteVec(centre) || !Number.isFinite(bird.heading) || !Number.isFinite(bird.vy) ||
+  if (!validCameraOrbit(orbit) || !finiteVec(centre) || !Number.isFinite(bird.heading) || !Number.isFinite(bird.vy) ||
     !Number.isFinite(metrics.bodyCollisionRadius) || metrics.bodyCollisionRadius <= 0 ||
     !Number.isFinite(radius) || projection.near <= 0 || projection.aspect <= 0 ||
     !(projection.verticalFovDegrees > 0 && projection.verticalFovDegrees < 180)) {
@@ -182,14 +184,23 @@ export function resolveCamera({
   const nominalTarget = first ? anchor : add(centre, rotated(metrics.chaseTargetOffset, sin, cos));
   const eye = metrics.eyeOrigin === 'sole' ? add(metrics.soleOffset, metrics.eyeOffset) : metrics.eyeOffset;
   const offset = first ? eye : bird.grounded ? metrics.chaseGroundOffset : metrics.chaseAirOffset;
-  const desired = first && firstPersonEyeWorld ? firstPersonEyeWorld : add(centre, rotated(offset, sin, cos));
+  const normalPosition = first && firstPersonEyeWorld ? firstPersonEyeWorld : add(centre, rotated(offset, sin, cos));
+  const desired = first ? normalPosition : birdOrbitPosition(nominalTarget, normalPosition, orbit);
   if (!finiteVec(nominalTarget) || !finiteVec(desired)) return { kind: 'blocked', reason: 'invalid-view' };
   const target = clip(anchor, nominalTarget, space);
   const goal = clip(target, desired, space);
 
   let position = goal;
   let cut = true;
-  if (previousPosition && isFree(previousPosition, space)) {
+  const manualOrbit = !first && orbit && (orbit.yaw !== 0 || orbit.pitch !== null);
+  const orbitStart = previousPosition && isFree(previousPosition, space) ? previousPosition : clip(target, normalPosition, space);
+  const orbitAlpha = previousPosition ? Number.isFinite(dt) && dt > 0 ? reducedMotion ? 1 : -Math.expm1(-6 * dt) : 0 : 1;
+  const orbitStep = manualOrbit ? stableOrbitStep(target, orbitStart, desired, orbitAlpha, candidate =>
+    isFree(candidate, space) && firstHit(orbitStart, candidate, space) === null && firstHit(target, candidate, space) === null) : null;
+  if (orbitStep) {
+    position = orbitStep;
+    cut = !previousPosition || !isFree(previousPosition, space);
+  } else if (previousPosition && isFree(previousPosition, space)) {
     cut = false;
     const alpha = Number.isFinite(dt) && dt > 0 ? (first || reducedMotion ? 1 : -Math.expm1(-6 * dt)) : 0;
     const candidate = mix(previousPosition, goal, alpha);
@@ -205,7 +216,8 @@ export function resolveCamera({
   }
 
   const pitch = first ? Math.max(-3, Math.min(4, bird.vy * 0.28)) : 0;
+  const forward: Vec3 = [sin * 40, pitch, -cos * 40];
   const lookAt = first || distance(position, target) < skin
-    ? add(position, [sin * 40, pitch, -cos * 40]) : target;
+    ? add(position, first && orbit ? orbitViewDirection(forward, orbit) : forward) : target;
   return { kind: 'resolved', position, lookAt, cut, occluded: firstHit(target, position, space) !== null };
 }

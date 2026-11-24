@@ -1,3 +1,5 @@
+import { HUMAN_CHARACTERS } from '../src/human-characters.ts';
+import { approachingPigeon } from './pigeon-approach.ts';
 import type {
   GroundContext, GroundSample, NpcAction, NpcClockFrame, NpcEvent, NpcFrame, NpcKind, NpcLimits,
   NpcNavigation, NpcOptions, NpcRoute, NpcState, NpcStimulus, Point2, Point3, SpawnZone,
@@ -7,18 +9,28 @@ import { DEFAULT_LIMITS, FIXED_STEP, HARD_MAX_NPCS, MAX_FRAME_SECONDS, NPC_KINDS
 type Mutable<T> = { -readonly [K in keyof T]: T[K] };
 type EventData<T = NpcEvent> = T extends NpcEvent ? Omit<T, 'npcId' | 'kind' | 'time' | 'position' | 'state'> : never;
 interface Agent extends Mutable<NpcState> {
+  walkingFoodSeconds: number;
+  nextFoodAge: number;
+  talkUntil?: number;
+  talkAfter?: number;
   zoneId: string;
   waypoint: number;
   direction: 1 | -1;
   pauseUntil: number;
   fleeUntil: number;
+  fleeRemaining: number;
+  fleeStartX: number;
+  fleeStartZ: number;
+  fleeRerouteAfter: number;
+  escapeNavigation: boolean;
+  duckUntil: number;
   fleeX: number;
   fleeZ: number;
   reactionAfter: number;
   lifetime: number;
   nextFootstep: number;
   motionSpeed: number;
-  pauseAction: 'look' | 'idle';
+  pauseAction: 'look' | 'idle' | 'duck';
   nearby?: { id: string; distance: number };
 }
 interface Settings {
@@ -94,6 +106,8 @@ export class NpcSystem {
       if (!zone.id || zoneIds.has(zone.id) || !route || !Number.isFinite(zone.radius) || zone.radius <= 0
         || !Number.isFinite(zone.center.x) || !Number.isFinite(zone.center.z)
         || (zone.referenceY !== undefined && !Number.isFinite(zone.referenceY))
+        || (zone.priorityDistance !== undefined && (!Number.isFinite(zone.priorityDistance) || zone.priorityDistance <= 0))
+        || (zone.minObserverDistance !== undefined && (!Number.isFinite(zone.minObserverDistance) || zone.minObserverDistance < 0))
         || !Number.isInteger(zone.capacity) || zone.capacity < 1 || zone.capacity > HARD_MAX_NPCS
         || !zone.kinds.length || zone.kinds.some(kind => !route.kinds.includes(kind))) {
         throw new TypeError('NPC spawn zone must reference a route, valid radius/capacity and allowed species');
@@ -156,7 +170,7 @@ export class NpcSystem {
 
   private stateOf(a: Agent): NpcState {
     return { id: a.id, kind: a.kind, x: a.x, y: a.y, z: a.z,
-      heading: a.heading, action: a.action, speed: a.speed, gaitDistance: a.gaitDistance,
+      talkPartnerId: a.talkPartnerId, humanRole: a.humanRole, humanGender: a.humanGender, humanOutfit: a.humanOutfit, foodSequence: a.foodSequence, foodThrowAge: a.foodThrowAge, heading: a.heading, action: a.action, speed: a.speed, gaitDistance: a.gaitDistance,
       age: a.age, variant: a.variant, surface: a.surface, routeId: a.routeId, bodyScale: a.bodyScale, layerId: a.layerId };
   }
 
@@ -238,15 +252,17 @@ export class NpcSystem {
       const distance = distance2(a, observer);
       if (distance > this.options.despawn) { this.remove(i, 'distance'); continue; }
       if (a.age > a.lifetime && distance > this.options.spawnMin) { this.remove(i, 'lifetime'); continue; }
-      const sample = this.ground(a, a.kind, { referenceY: a.y, layerId: a.layerId });
+      const sample = this.ground(a, a.kind, { referenceY: a.y, layerId: a.layerId, escape: a.escapeNavigation });
       if (!sample || Math.abs(sample.height - a.y) > this.profiles[a.kind].maxStep) { this.remove(i, 'invalid-ground'); continue; }
       a.y = sample.height;
       a.surface = sample.surface;
       a.layerId = sample.layerId ?? a.layerId;
       this.react(a, stimuli);
       this.move(a, stimuli);
+      this.feed(a);
       i += 1;
     }
+    this.pairHumans();
     // Four successful spawns maximum, and twelve attempts per species per tick.
     let budget = 4;
     for (const kind of NPC_KINDS) {
@@ -259,8 +275,10 @@ export class NpcSystem {
   }
 
   private trySpawn(kind: NpcKind, observer: Point3, stimuli: readonly NpcStimulus[]): boolean {
-    const zones = this.nav.spawnZones.filter(z => z.kinds.includes(kind)
+    let zones = this.nav.spawnZones.filter(z => z.kinds.includes(kind)
       && this.agents.filter(a => a.zoneId === z.id).length < z.capacity);
+    const preferred = zones.filter(z => z.priorityDistance !== undefined && distance2(z.center, observer) <= z.priorityDistance);
+    if (preferred.length) zones = preferred;
     if (!zones.length) return false;
     const zone: SpawnZone = zones[Math.floor(this.random() * zones.length)];
     const route = this.routes.get(zone.routeId)!;
@@ -272,7 +290,7 @@ export class NpcSystem {
     const z = start.z + (end.z - start.z) * t;
     const p = { x, z };
     const distance = distance2(p, observer);
-    if (distance < this.options.spawnMin || distance > this.options.spawnMax || distance2(p, zone.center) > zone.radius) return false;
+    if (distance < (zone.minObserverDistance ?? this.options.spawnMin) || distance > this.options.spawnMax || distance2(p, zone.center) > zone.radius) return false;
     const context: GroundContext = { referenceY: zone.referenceY
       ?? (start.y !== undefined && end.y !== undefined ? start.y + (end.y - start.y) * t : start.y ?? end.y),
       layerId: zone.layerId ?? start.layerId ?? end.layerId };
@@ -282,14 +300,21 @@ export class NpcSystem {
     if (!this.spaceFree(at, at, kind, undefined, stimuli)) return false;
     this.traversalQueries += 1;
     if (!this.nav.canTraverse(at, at, this.profiles[kind], context)) return false;
+    const variant = Math.floor(this.random() * 8);
+    const humanRole = kind !== 'human' ? undefined : !this.agents.some(a => a.humanRole === 'grandmother') ? 'grandmother'
+      : !this.agents.some(a => a.humanRole === 'grandfather') ? 'grandfather' : 'walker';
     const a: Agent = {
       id: `npc-${++this.sequence}`, kind, x, y: at.y, z,
       heading: Math.atan2(end.x - start.x, -(end.z - start.z)), action: 'walk', speed: 0,
-      gaitDistance: 0, age: 0, variant: Math.floor(this.random() * 8), surface: sample.surface,
+      gaitDistance: 0, age: 0, variant, surface: sample.surface,
       routeId: route.id, zoneId: zone.id, waypoint: (segment + 1) % route.points.length, direction: 1,
       bodyScale: this.bodyScale,
+      humanOutfit: kind === 'human' ? route.humanOutfit : undefined,
+      humanRole, humanGender: kind !== 'human' ? undefined : humanRole === 'grandmother' ? 'female'
+        : humanRole === 'grandfather' ? 'male' : HUMAN_CHARACTERS[variant].gender,
+      foodSequence: kind === 'human' ? 0 : undefined, foodThrowAge: Infinity, walkingFoodSeconds: 0, nextFoodAge: 120,
       layerId: sample.layerId ?? context.layerId,
-      pauseUntil: 0, fleeUntil: 0, fleeX: 0, fleeZ: 0, reactionAfter: 0,
+      pauseUntil: 0, fleeUntil: 0, fleeRemaining: 0, fleeStartX: 0, fleeStartZ: 0, fleeRerouteAfter: 0, escapeNavigation: false, duckUntil: 0, fleeX: 0, fleeZ: 0, reactionAfter: 0,
       lifetime: this.options.lifetime[0] + this.random() * (this.options.lifetime[1] - this.options.lifetime[0]),
       nextFootstep: this.profiles[kind].stride / 2,
       motionSpeed: 0, pauseAction: 'look',
@@ -299,11 +324,30 @@ export class NpcSystem {
     return true;
   }
 
+  private feed(a: Agent): void {
+    if (a.kind !== 'human' || a.fleeUntil > this.time || a.duckUntil > this.time) return;
+    if (a.humanRole === 'walker') {
+      if ((a.action === 'walk' || a.action === 'avoid') && a.speed > .025 * this.bodyScale) a.walkingFoodSeconds += FIXED_STEP;
+      if (a.walkingFoodSeconds + 1e-9 >= 20) { a.walkingFoodSeconds -= 20; a.foodSequence = (a.foodSequence ?? 0) + 1; }
+      return;
+    }
+    if (Number.isFinite(a.foodThrowAge)) {
+      const previous = a.foodThrowAge!; a.foodThrowAge = previous + FIXED_STEP;
+      if (previous + 1e-9 < .3 && a.foodThrowAge + 1e-9 >= .3) a.foodSequence = (a.foodSequence ?? 0) + 1;
+      if (a.foodThrowAge + 1e-9 >= 1.2) a.foodThrowAge = Infinity;
+    }
+    if (a.age + 1e-9 < a.nextFoodAge || a.fleeUntil > this.time || a.duckUntil > this.time || Number.isFinite(a.foodThrowAge)) return;
+    // Keep the two-minute cadence on the accepted simulation clock, never wall time.
+    a.nextFoodAge += 120; a.foodThrowAge = 0;
+    a.talkPartnerId = undefined; a.speed = 0; a.motionSpeed = 0; this.setAction(a, 'idle');
+  }
+
   private react(a: Agent, stimuli: readonly NpcStimulus[]): void {
     const profile = this.profiles[a.kind];
     let nearest: NpcStimulus | undefined;
     let nearestDistance = Infinity;
     for (const stimulus of stimuli) {
+      if (a.kind === 'human' && stimulus.birdFlight && !approachingPigeon(a, stimulus)) continue;
       const dy = stimulus.position.y - (a.y + profile.height / 2);
       const distance = Math.hypot(a.x - stimulus.position.x, dy, a.z - stimulus.position.z);
       const range = profile.reactionRadius * (a.nearby?.id === stimulus.id ? 1.4 : 1);
@@ -318,7 +362,33 @@ export class NpcSystem {
     if (!nearest) return;
     if (!a.nearby) this.emit(a, { type: 'proximity', phase: 'enter', targetId: nearest.id, distance: nearestDistance });
     a.nearby = { id: nearest.id, distance: nearestDistance };
-    if (this.time < a.reactionAfter) return;
+    if (this.time < a.reactionAfter || a.fleeRemaining > 0 && this.time < a.fleeUntil) return;
+    if (a.kind === 'human' && approachingPigeon(a, nearest)) {
+      if (!a.humanGender) return;
+      a.reactionAfter = this.time + 9 + this.random() * 3;
+      // An incoming bird takes priority over conversation/feeding. Published food
+      // sequences remain intact; the existing two-minute feeding cadence resumes.
+      const partner = this.agents.find(other => other.id === a.talkPartnerId);
+      if (partner?.talkPartnerId === a.id) partner.talkPartnerId = undefined;
+      a.talkPartnerId = undefined; a.talkAfter = this.time + 4;
+      let dx = a.x - nearest.position.x, dz = a.z - nearest.position.z;
+      if (Math.hypot(dx, dz) < .001) { dx = Math.sin(a.heading + Math.PI / 2); dz = -Math.cos(a.heading + Math.PI / 2); }
+      const length = Math.hypot(dx, dz); a.fleeX = dx / length; a.fleeZ = dz / length;
+      if (a.humanGender === 'male') {
+        a.duckUntil = this.time + .85; a.fleeUntil = a.duckUntil;
+        this.setAction(a, 'duck');
+        this.emit(a, { type: 'reaction', response: 'duck', targetId: nearest.id });
+      } else {
+        // Count real, collision-checked metres, not a timer that expires at a wall.
+        a.fleeRemaining = 10.5; a.fleeStartX = a.x; a.fleeStartZ = a.z;
+        a.fleeUntil = this.time + 30;
+        a.fleeRerouteAfter = this.time; a.escapeNavigation = true;
+        this.setAction(a, 'startle');
+        this.emit(a, { type: 'reaction', response: 'startle', targetId: nearest.id });
+        this.emit(a, { type: 'audio', cue: 'human-scream', gain: .27, surface: a.surface });
+      }
+      return;
+    }
     const speed = Number.isFinite(nearest.speed) ? nearest.speed! : 0;
     const sudden = nearest.type === 'flap' || nearest.type === 'sudden-motion' || speed > 5;
     const close = nearestDistance < profile.radius + this.stimulusRadius(nearest) + 0.35 * this.bodyScale;
@@ -340,13 +410,48 @@ export class NpcSystem {
     }
   }
 
+  private pairHumans(): void {
+    let pairs = this.agents.filter(a => a.talkPartnerId).length / 2;
+    for (const a of this.agents) {
+      if (pairs >= 3) break;
+      if (a.kind !== 'human' || a.talkPartnerId || this.time < (a.talkAfter ?? 0) || a.fleeUntil > this.time || a.duckUntil > this.time || a.age < 3 || Number.isFinite(a.foodThrowAge)) continue;
+      const b = this.agents.find(b => b !== a && b.kind === 'human' && !b.talkPartnerId && b.age >= 3 && !Number.isFinite(b.foodThrowAge) &&
+        this.time >= (b.talkAfter ?? 0) && b.fleeUntil <= this.time && b.duckUntil <= this.time && b.layerId === a.layerId && Math.abs(a.y-b.y)<.4 && distance2(a,b)>=1.1 && distance2(a,b)<=2.8);
+      if (!b) continue;
+      this.traversalQueries++;
+      if (!this.nav.canTraverse(a,b,this.profiles.human,{referenceY:a.y,layerId:a.layerId})) continue;
+      const until=this.time+5+this.random()*3;
+      for(const [human,partner] of [[a,b],[b,a]]) {
+        human.talkPartnerId=partner.id;human.talkUntil=until;human.talkAfter=until+18;
+        human.speed=0;human.motionSpeed=0;this.setAction(human,'talk');
+      }
+      pairs++;
+    }
+  }
+
   private move(a: Agent, stimuli: readonly NpcStimulus[]): void {
     a.speed = 0;
+    if (a.kind === 'human' && Number.isFinite(a.foodThrowAge) && a.fleeUntil <= this.time) {
+      a.motionSpeed = 0; this.setAction(a, 'idle'); return;
+    }
+    if(a.talkPartnerId){
+      const partner=this.agents.find(b=>b.id===a.talkPartnerId);
+      if(partner && partner.talkPartnerId===a.id && this.time<(a.talkUntil??0) && a.fleeUntil<=this.time && partner.fleeUntil<=this.time && distance2(a,partner)<=3.2){
+        a.motionSpeed=0;
+        a.heading=turnToward(a.heading,Math.atan2(partner.x-a.x,-(partner.z-a.z)),this.profiles.human.turnRate*FIXED_STEP);
+        this.setAction(a,'talk');return;
+      }
+      a.talkPartnerId=undefined;
+    }
     const fleeing = this.time < a.fleeUntil;
+    const ducking = a.kind === 'human' && this.time < a.duckUntil;
     const profile = this.profiles[a.kind];
     const route = this.routes.get(a.routeId)!;
     let target = route.points[a.waypoint];
     if (!fleeing && this.time >= a.pauseUntil && distance2(a, target) < 0.10) {
+      // Stay on verified dry ground while returning; rejoin the original walk
+      // before reinstating corridor limits so an escaped human never disappears.
+      a.escapeNavigation = false;
       if (route.loop) a.waypoint = (a.waypoint + 1) % route.points.length;
       else {
         if (a.waypoint === 0) a.direction = 1;
@@ -362,8 +467,8 @@ export class NpcSystem {
     const dx = fleeing ? a.fleeX : target.x - a.x;
     const dz = fleeing ? a.fleeZ : target.z - a.z;
     const pausing = !fleeing && this.time < a.pauseUntil;
-    const desiredSpeed = pausing ? 0 : fleeing ? profile.fleeSpeed : profile.walkSpeed;
-    const acceleration = profile.acceleration * FIXED_STEP;
+    const desiredSpeed = pausing ? 0 : fleeing ? a.kind === 'human' ? a.humanGender === 'female' ? 3.2 * this.bodyScale : profile.walkSpeed : profile.fleeSpeed : profile.walkSpeed;
+    const acceleration = (a.kind === 'human' && fleeing ? 4.5 * this.bodyScale : profile.acceleration) * FIXED_STEP;
     a.motionSpeed += Math.max(-acceleration * 1.5, Math.min(acceleration, desiredSpeed - a.motionSpeed));
     if (a.motionSpeed < 0.01) { a.motionSpeed = 0; this.setAction(a, a.pauseAction); return; }
     const desired = pausing ? a.heading : Math.atan2(dx, -dz);
@@ -382,8 +487,15 @@ export class NpcSystem {
       a.heading = heading; a.surface = sample.surface;
       a.layerId = sample.layerId ?? a.layerId;
       a.speed = moved / FIXED_STEP; a.gaitDistance += moved;
+      if (fleeing && a.fleeRemaining > 0) {
+        a.fleeRemaining = Math.max(0, a.fleeRemaining - moved);
+        if (a.fleeRemaining <= 1e-7) {
+          if (Math.hypot(a.x - a.fleeStartX, a.z - a.fleeStartZ) >= 10) { a.fleeRemaining = 0; a.fleeUntil = this.time; }
+          else a.fleeRemaining = 1e-7;
+        }
+      }
       a.motionSpeed = a.speed;
-      this.setAction(a, fleeing ? 'startle' : offset === 0 ? 'walk' : 'avoid');
+      this.setAction(a, ducking ? 'duck' : fleeing ? 'startle' : offset === 0 ? 'walk' : 'avoid');
       if (a.gaitDistance >= a.nextFootstep) {
         // Match the model's fixed distance/stride origin. Overshoot must not
         // accumulate into a new phase; collapse skipped contacts to <=1 cue/tick.
@@ -394,9 +506,20 @@ export class NpcSystem {
       }
       return;
     }
-    this.setAction(a, fleeing ? 'startle' : 'look');
+    if (fleeing && a.fleeRemaining > 0 && this.time >= a.fleeRerouteAfter) {
+      a.fleeRerouteAfter = this.time + .5;
+      // Bounded side probes avoid repeatedly running into the same wall. Every
+      // probe and subsequent step still checks dry ground, obstacles and people.
+      for (const offset of [0, side * Math.PI / 4, -side * Math.PI / 4, side * Math.PI / 2, -side * Math.PI / 2, side * Math.PI * .75, -side * Math.PI * .75, Math.PI]) {
+        const heading = desired + offset;
+        const probe = { x: a.x + Math.sin(heading) * .65, y: a.y, z: a.z - Math.cos(heading) * .65 };
+        if (!this.canMove(a, probe, stimuli)) continue;
+        a.fleeX = Math.sin(heading); a.fleeZ = -Math.cos(heading); break;
+      }
+    }
+    this.setAction(a, ducking ? 'duck' : fleeing ? 'startle' : 'look');
     a.motionSpeed = 0;
-    a.heading = turnToward(a.heading, desired + side * Math.PI / 2, profile.turnRate * FIXED_STEP);
+    a.heading = turnToward(a.heading, fleeing && a.fleeRemaining > 0 ? Math.atan2(a.fleeX, -a.fleeZ) : desired + side * Math.PI / 2, profile.turnRate * FIXED_STEP);
     a.pauseUntil = this.time + FIXED_STEP;
   }
 
@@ -408,7 +531,7 @@ export class NpcSystem {
     let sample: GroundSample | undefined;
     for (let i = 1; i <= slices; i += 1) {
       sample = this.ground({ x: a.x + (to.x - a.x) * i / slices, z: a.z + (to.z - a.z) * i / slices }, a.kind,
-        { referenceY: previousHeight, layerId });
+        { referenceY: previousHeight, layerId, escape: a.escapeNavigation });
       if (!sample || Math.abs(sample.height - previousHeight) > profile.maxStep
         || Math.abs(sample.height - a.y) > profile.maxStep + distance2(a, to) * 0.5) return undefined;
       previousHeight = sample.height;
@@ -417,7 +540,7 @@ export class NpcSystem {
     if (!sample) return undefined;
     const groundedTo = { ...to, y: sample.height };
     this.traversalQueries += 1;
-    if (!this.nav.canTraverse(a, groundedTo, profile, { referenceY: a.y, layerId: a.layerId })
+    if (!this.nav.canTraverse(a, groundedTo, profile, { referenceY: a.y, layerId: a.layerId, escape: a.escapeNavigation })
       || !this.spaceFree(a, groundedTo, a.kind, a.id, stimuli)) return undefined;
     return sample;
   }

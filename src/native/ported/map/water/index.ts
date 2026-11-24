@@ -1,6 +1,7 @@
 import {
   BufferGeometry, Float32BufferAttribute, Group, Mesh, ShaderMaterial,
-  UniformsLib, UniformsUtils, Vector2, Vector4,
+  UniformsLib, UniformsUtils, Vector2, Vector4, SphereGeometry, ConeGeometry,
+  MeshStandardMaterial, Object3D, InstancedMesh,
 } from 'three';
 import { Reflector } from 'three/addons/objects/Reflector.js';
 import type { MapQuality, WaterConfig } from '../contracts.ts';
@@ -92,6 +93,8 @@ export function createRiverWater(config: WaterConfig, quality: MapQuality = 'mob
   const material = mesh.material as ShaderMaterial;
   material.lights = true;
   material.fog = true;
+  material.transparent = true;
+  material.depthWrite = false;
   const phases = material.uniforms.uPhase.value as Float32Array;
   const impactData = material.uniforms.uImpact.value as Float32Array;
   const impactCount = material.uniforms.uImpactCount as { value: number };
@@ -117,6 +120,24 @@ export function createRiverWater(config: WaterConfig, quality: MapQuality = 'mob
   const root = new Group();
   root.name = 'cheonggyecheon:river';
   root.add(mesh);
+
+  // Small original underwater geometry stays below the surface and is not a collider.
+  const stoneGeometry=new SphereGeometry(1,8,6), plantGeometry=new ConeGeometry(0.035,1,5);
+  const fishGeometry=new SphereGeometry(1,10,6);
+  const stoneMaterial=new MeshStandardMaterial({color:'#777e76',roughness:0.96});
+  const plantMaterial=new MeshStandardMaterial({color:'#536f5e',roughness:0.93});
+  const fishMaterial=new MeshStandardMaterial({color:'#7e8584',roughness:0.58,metalness:0.1});
+  const stones=new InstancedMesh(stoneGeometry,stoneMaterial,72), plants=new InstancedMesh(plantGeometry,plantMaterial,48);
+  const fish=new InstancedMesh(fishGeometry,fishMaterial,12), transform=new Object3D();
+  for(let i=0;i<72;i++){
+    const x=minX+((i*37.7)%(maxX-minX)),z=minZ+1.2+((i*5.37)%(maxZ-minZ-2.4));
+    const scale=0.08+(i%4)*0.035;transform.position.set(x,config.bedY+0.035,z);transform.scale.set(scale*1.5,scale*0.55,scale);transform.rotation.set(0,i*0.61,0);transform.updateMatrix();stones.setMatrixAt(i,transform.matrix);
+  }
+  for(let i=0;i<48;i++){
+    const x=minX+((i*43.3)%(maxX-minX)),z=minZ+0.6+((i*7.13)%(maxZ-minZ-1.2));
+    transform.position.set(x,config.bedY+0.12,z);transform.scale.set(1,0.24,1);transform.rotation.set(0,0,(i%3-1)*0.16);transform.updateMatrix();plants.setMatrixAt(i,transform.matrix);
+  }
+  root.add(stones,plants,fish);
 
   let lastTime = -1;
   let order = 0;
@@ -156,6 +177,13 @@ export function createRiverWater(config: WaterConfig, quality: MapQuality = 'mob
       }
       lastTime = time;
       for (let i = 0; i < bandCount; i++) phases[i] = phaseAt(time, phaseRates[i], bands[i].seed);
+      for(let i=0;i<12;i++){
+        const x=minX+8+i*(maxX-minX-16)/12+Math.sin(time*0.24+i)*1.5;
+        const z=(minZ+maxZ)/2+Math.sin(time*0.17+i*1.3)*(maxZ-minZ)*0.28;
+        transform.position.set(x,config.bedY+depth*0.48,z);transform.rotation.set(0,Math.PI/2+0.25*Math.sin(time*0.24+i),0);
+        transform.scale.set(0.14,0.04,0.055);transform.updateMatrix();fish.setMatrixAt(i,transform.matrix);
+      }
+      fish.instanceMatrix.needsUpdate=true;
       uploadImpacts(time);
     },
     addRipple(x: number, z: number, time: number, strength = 0.8) {
@@ -190,6 +218,8 @@ export function createRiverWater(config: WaterConfig, quality: MapQuality = 'mob
       impactCount.value = 0;
       impactData.fill(0);
       geometry.dispose();
+      stoneGeometry.dispose();plantGeometry.dispose();fishGeometry.dispose();
+      stoneMaterial.dispose();plantMaterial.dispose();fishMaterial.dispose();
       if (reflector) reflector.dispose();
       else material.dispose();
     },

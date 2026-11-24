@@ -1,0 +1,25 @@
+{
+  "selected_species": "Mallard, Anas platyrhynchos (청둥오리), two drakes and two hens",
+  "seoul_presence": {
+    "url": "https://parks.seoul.go.kr/content.do?key=2605160002",
+    "finding": "Seoul ecological information lists mallards and Eastern spot-billed ducks in protected urban river areas."
+  },
+  "sound": {
+    "title": "Duck Quack",
+    "author": "gibarroule",
+    "source_url": "https://freesound.org/people/gibarroule/sounds/365133/",
+    "download_url": "https://cdn.freesound.org/previews/365/365133_6659813-hq.mp3",
+    "license": "CC0 1.0",
+    "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+    "verified_on": "2026-11-07",
+    "source_description": "Real duck recording in Kuhhorst, Germany with Sennheiser shotgun microphone and Zoom H4N. Species not identified by author. Not represented as a Seoul field recording.",
+    "bytes": 148128,
+    "sha256": "599aab0d8a1be1214d2057cce21c03f79c3bc58ec0f106fe40a8d5b97fa32370",
+    "duration_seconds": 6.456,
+    "channels": 1,
+    "sample_rate": 48000,
+    "processing": "None; unchanged HQ preview MP3 bytes, normal playback rate. Only nearby visible hens are eligible.",
+    "attribution_required": false,
+    "auditioned": false
+  }
+}

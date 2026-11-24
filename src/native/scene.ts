@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import type { LookId } from '../progress.ts';
 import type { FlightInput } from '../simulation.ts';
+import type { CameraOrbitAngles } from '../camera-orbit.ts';
 import type { PreparedNativeFrame } from './frame-transaction.ts';
 import { createMapCandidate } from './ported/map/candidate.ts';
 import { queryRoofSupport, sampleGround } from './ported/map/layout.ts';
@@ -8,6 +9,17 @@ import type { MapQuality } from './ported/map/contracts.ts';
 import { worldAnchors } from './ported/npcs/models/index.ts';
 import type { NpcEvent, NpcState } from './ported/npcs/src/contracts.ts';
 import { createNativeNpcBridge } from './npc-bridge.ts';
+import { createOwlHunt } from './owl-hunt.ts';
+import { owlFlightTuning } from './owl-night.ts';
+import { NORMAL_FLIGHT_TUNING, flightTuningAfterFood, createFoodBoost, advanceFoodBoost } from './flight-feeding.ts';
+import { createStreetFlock } from './street-flock.ts';
+import { createRoadTraffic } from './road-traffic.ts';
+import { withStreamStoneSupport } from './stream-rock-shape.ts';
+import { createVehicleWorld } from './vehicle-world.ts';
+import { createVehicleFeathers } from './vehicle-feathers.ts';
+import { createWaterSplash } from './water-splash.ts';
+import { createCloudLayer, withCloudSupport } from './cloud-platforms.ts';
+import { PIGEON_APPROVED_FLOOR_CONTACT, PIGEON_FED_TUNING, PIGEON_PLAYER_TUNING } from '../pigeon-kinematics.ts';
 import { createMapQueries, type MapNativeQueries } from './ported/motion/locomotion/b2/map-queries.ts';
 import { createNativeMotionState, nativeFeet, type NativeMotionState } from './ported/motion/locomotion/b2/native-motion.ts';
 import type { NativeBody, NativeWorldQueries, Vec3 } from './ported/motion/locomotion/b2/contracts.ts';
@@ -19,9 +31,10 @@ export type NativePreset = 'plaza' | 'bench' | 'roof' | 'roof-edge' | 'roof-drop
 export const NATIVE_PRESETS: readonly NativePreset[] = ['plaza','bench','roof','roof-edge','roof-drop','bridge','under-bridge','river','wall'];
 export type NativeEvent = SceneEvent & { readonly rawId:string; readonly producer:'motion'|'map'|'npc';readonly npcState?:NpcState;readonly npcLocalTime?:number };
 type NativeNpcRecord = NpcEvent & { readonly rawId:string;readonly simTime:number };
-const tuning=Object.freeze({walkSpeed:.9,flightSpeed:12,glideSpeed:15});
+const tuning=NORMAL_FLIGHT_TUNING;
+const pigeonShiftTuning=Object.freeze({...NORMAL_FLIGHT_TUNING,walkSpeed:PIGEON_PLAYER_TUNING.walkSpeed});
 export interface NativeSceneOptions {
-  quality?:MapQuality; preset?:NativePreset; sessionId?:string; world?:NativeWorldQueries;
+  mapData?:'procedural'|'osm'; quality?:MapQuality; preset?:NativePreset; sessionId?:string; world?:NativeWorldQueries;
   /** Internal CPU seam only. No UI/storage/selection policy for these IDs. */
   initialAppearance?:Appearance;
   actorDependencies?:CandidateDependencies;
@@ -35,15 +48,21 @@ function legacy(appearance:Appearance):LookId|null{
 }
 export function createNativeScene(parent:THREE.Scene,initialLook:LookId,options:NativeSceneOptions={}){
   const sessionId=options.sessionId??crypto.randomUUID();
-  const map=createMapCandidate({quality:options.quality??'desktop',terrain:'sunken-channel',proportions:'reference-scale',eventSessionId:sessionId});
+  let foodBoost=createFoodBoost();
+  const map=createMapCandidate({data:options.mapData,quality:options.quality??'desktop',terrain:'sunken-channel',proportions:'reference-scale',eventSessionId:sessionId});
   const waterMesh=map.root.getObjectByName('cheonggyecheon:water') as THREE.Mesh<THREE.BufferGeometry,THREE.ShaderMaterial>;
   parent.add(map.root);
-  const mapQueries=createMapQueries(map.layout),queries=options.world??mapQueries;
+  const clouds=createCloudLayer(parent);
+  const mapQueries=createMapQueries(map.layout),baseQueries=withCloudSupport(withStreamStoneSupport(options.world??mapQueries,map.layout),clouds.platforms);
+  const traffic=createRoadTraffic(parent,map.layout);
+  const vehicles=createVehicleWorld(baseQueries,()=>traffic.snapshot().states),queries=vehicles.world;
+  const vehicleFeathers=createVehicleFeathers(parent,{quality:map.layout.quality});
   let birdOwner=new THREE.Group();birdOwner.name='player-bird-owner';parent.add(birdOwner);
   const sceneCleanupErrors:string[]=[];
   let version=0,frameIndex=0,committedCallAge=10,disposed=false,committingFrame=false;
   let lastFailure:string|null=null,blockedFrames=0,batchSequence=0,sequence=0,npcRawSequence=0;
   let lastEvents:NativeEvent[]=[];
+  let lastPeckKind:'ground'|'opponent'='ground';
   const recentEvents:NativeEvent[]=[],rawRecent:MotionEvent[]=[],npcRecent:NativeNpcRecord[]=[];
   const modeVisits:Record<NativeMotionState['mode'],number>={rest:0,walk:0,flap:0,glide:0,fall:0};
   type Actor=ReturnType<typeof createSpeciesActor>;
@@ -52,7 +71,7 @@ export function createNativeScene(parent:THREE.Scene,initialLook:LookId,options:
     const probe=buildNativeAppearance(appearance,0,options.actorDependencies);
     const body=probe.body;probe.dispose();
     const fallback=spawn(preset,body),at=options.spawnForTest?.(preset,fallback)??fallback,old=previous?.snapshot();
-    const initial=createNativeMotionState({body,tuning,feet:at.feet,sourceId:old?.state.sourceId??'player-bird',time:old?.state.time??0,nextEventSequence:old?.state.nextEventSequence??1});
+    const initial=createNativeMotionState({body,tuning:old?.state.tuning??tuning,feet:at.feet,sourceId:old?.state.sourceId??'player-bird',time:old?.state.time??0,nextEventSequence:old?.state.nextEventSequence??1});
     initial.heading=at.heading;
     const support=queries.supportAt({at:at.feet,previousFeetY:at.feet.y,footRadiusM:body.footSupportRadiusM,heightM:body.heightM,maxRiseM:.000002,maxDropM:.000002});
     if(support===undefined)throw new Error('Unverified native spawn support');
@@ -63,10 +82,18 @@ export function createNativeScene(parent:THREE.Scene,initialLook:LookId,options:
       calledAt:old?.calledAt,dependencies:options.actorDependencies});
   }
   try{actor=construct(normalizeAppearance(options.initialAppearance??appearanceForLegacy(initialLook)),options.preset??'plaza');}
-  catch(error){map.dispose();birdOwner.removeFromParent();throw error;}
+  catch(error){vehicleFeathers.dispose();traffic.dispose();clouds.dispose();map.dispose();birdOwner.removeFromParent();throw error;}
+  const splash=createWaterSplash(parent);
   const npcs=createNativeNpcBridge(parent,map.layout,actor.state.time);
+  const owlHunt=createOwlHunt(parent,(id,at)=>npcs.captureRat(id,at));
+  const flock=createStreetFlock(parent,map.layout,{captureRat:(id,at)=>npcs.captureRat(id,at),onAnimalPeck:(id,at)=>npcs.notifyPeck(id,at)});
 
   function spawn(id: NativePreset, profile: NativeBody): { feet: Vec3; heading: number } {
+    if(map.layout.realMap){
+      const at=map.layout.spawns[0];
+      if(!at)throw new Error('Verified OSM spawn missing');
+      return{feet:{x:at.x,y:at.y,z:at.z},heading:0};
+    }
     if (id === 'bench') return { feet: { x: -79.4, y: sampleGround(map.layout, -79.4, -311.3).y, z: -311.3 }, heading: Math.PI };
     if (id === 'bridge' || id === 'under-bridge') {
       const referenceY = id === 'bridge' ? 0 : map.layout.promenadeY;
@@ -119,6 +146,7 @@ export function createNativeScene(parent:THREE.Scene,initialLook:LookId,options:
     for (const event of map.observeActor({ id: 'player-bird', x: state.x, y: state.y, z: state.z,
       radius: body.horizontalRadiusM, centreToSole: body.centreToSoleM, footRadius: body.footSupportRadiusM,
       horizontalRadius: body.horizontalRadiusM, grounded: state.grounded }, state.time, body)) {
+      if(event.type==='water-enter')splash.add(event,event.time,event.strength);
       result.push({ ...stamp(event.eventId, 'map', event, event.time), type: event.type,
         targetId: event.targetId, surface: event.surface, strength: event.strength });
     }
@@ -142,43 +170,64 @@ export function createNativeScene(parent:THREE.Scene,initialLook:LookId,options:
     const isCurrent=()=>!disposed&&actor===owner&&version===before&&proposal.isCurrent();
     return{...proposal,isCurrent,commit(){
       if(!isCurrent()){proposal.cancel();throw new Error('Stale native appearance proposal');}
-      version++;proposal.commit();
+      version++;proposal.commit();vehicles.clear();owlHunt.clear();
     }};
   }
   return{
-    map,queries,get state(){return actor.state;},get root(){return actor.root;},get look(){return legacy(actor.appearance);},get appearance(){return actor.appearance;},
+    get pigeonFlockTakeoffSequence(){return flock.pigeonFlockTakeoffSequence;},
+    get peckKind(){return lastPeckKind;},
+    map,queries,clouds,traffic,get foodBoost(){return foodBoost;},get state(){return actor.state;},get root(){return actor.root;},get look(){return legacy(actor.appearance);},get appearance(){return actor.appearance;},
     get camera(){return actor.snapshot().camera;},get projection(){return actor.snapshot().projection;},get events():readonly NativeEvent[]{return lastEvents;},
-    world:{obstacles:map.obstacles,update(_time:number,delta:number){if(!disposed)map.update(actor.state.time,delta);}},
+    world:{obstacles:map.obstacles,update(_time:number,delta:number){if(!disposed){map.update(actor.state.time,delta);splash.update(actor.state.time);}}},
     prepareAppearance,
+    cancelHunt(){version++;owlHunt.cancel();},
     selectAppearance(value:Appearance,lens?:Pick<CameraProjection,'verticalFovDegrees'|'aspect'>):boolean{
       try{const p=prepareAppearance(value,lens);if(p.kind==='unchanged')return true;if(p.kind!=='ready')return false;p.commit();return true;}catch{return false;}
     },
     selectLook(value:LookId,lens?:Pick<CameraProjection,'verticalFovDegrees'|'aspect'>):boolean{
       try{return this.selectAppearance(appearanceForLegacy(value),lens);}catch{return false;}
     },
-    prepare(input:Readonly<FlightInput>,seconds:number,projection:CameraProjection,mode:ViewMode,callAge:number,reducedMotion:boolean):PreparedNativeFrame{
+    prepare(input:Readonly<FlightInput>,seconds:number,projection:CameraProjection,mode:ViewMode,callAge:number,reducedMotion:boolean,peckAge=Infinity,orbit?:CameraOrbitAngles,flirtAge=Infinity,approvedFloorVisual=false):PreparedNativeFrame{
       const fail=(reason:string):PreparedNativeFrame=>{lastFailure=reason;blockedFrames++;return{kind:'blocked',reason};};
       if(disposed)return fail('disposed');
       if(committingFrame)return fail('commit-finalization-in-progress');
       if(!Number.isFinite(callAge)||callAge<0)return fail('invalid-call-age');
       const owner=actor,before=version,current=owner.snapshot(),coo=callAge<committedCallAge;
       const callTime=coo?Math.max(0,current.state.time+seconds-callAge):current.calledAt;
-      const p=owner.prepareFrame({contractVersion:1,frame:frameIndex+1,simTime:current.state.time+seconds,rawSeconds:seconds,acceptedSeconds:seconds,playing:true,
-        quality:map.layout.quality,reducedMotion},input,{mode,verticalFovDegrees:projection.verticalFovDegrees,aspect:projection.aspect},callTime);
+      const peckKind=flock.playerPeckKind({...nativeFeet(current.state),heading:current.state.heading,species:actor.appearance.speciesId,peckAge},npcs.snapshot().states);
+      const hunt=owlHunt.prepare(input,current.state,actor.appearance.speciesId,npcs.snapshot().states,seconds);
+      const motionTuning = actor.appearance.speciesId === 'pigeon'
+        ? foodBoost.remainingSeconds > 1e-9 ? PIGEON_FED_TUNING : hunt.input.accelerate ? pigeonShiftTuning : PIGEON_PLAYER_TUNING
+        : owlFlightTuning(flightTuningAfterFood(foodBoost.remainingSeconds),actor.appearance.speciesId,current.state.time+seconds);
+      const trafficProposal=traffic.prepare(seconds);
+      if(!trafficProposal)return fail('invalid-traffic-frame');
+      const vehicleProposal=vehicles.preview(trafficProposal.samples,current.state.time,()=>owner.prepareFrame({contractVersion:1,frame:frameIndex+1,simTime:current.state.time+seconds,rawSeconds:seconds,acceptedSeconds:seconds,playing:true,
+        quality:map.layout.quality,reducedMotion},hunt.input,{mode,verticalFovDegrees:projection.verticalFovDegrees,aspect:projection.aspect,...(orbit ? {orbit} : {})},callTime,peckKind==='ground'?peckAge:Infinity,peckKind==='opponent'?peckAge:Infinity,flirtAge,motionTuning));
+      const p=vehicleProposal.result;
       if(p.kind!=='ready')return fail(p.reason);
       const raw=p.previewEmissions;
-      const isCurrent=()=>!disposed&&!committingFrame&&actor===owner&&version===before&&p.isCurrent();
+      const isCurrent=()=>!disposed&&!committingFrame&&actor===owner&&version===before&&p.isCurrent()&&trafficProposal.isCurrent()&&vehicleProposal.isCurrent();
       return{kind:'ready',isCurrent,commit(){
         if(!isCurrent())throw new Error('Stale native scene proposal');
         version++;frameIndex++;committedCallAge=callAge;lastFailure=null;committingFrame=true;
         try{
+          vehicleProposal.commit();
+          trafficProposal.commit({x:current.camera.position[0],y:current.camera.position[1],z:current.camera.position[2]});
           p.commit();
           if(disposed)return;
           const s=actor.snapshot(),state=s.state,body=state.body;modeVisits[state.mode]++;
+          hunt.commit(state);
+          lastPeckKind=peckKind;
+          const floorContactAge=approvedFloorVisual&&peckKind==='ground'&&state.grounded&&state.mode==='rest'
+            ? PIGEON_APPROVED_FLOOR_CONTACT : undefined;
+          flock.update(seconds,{...nativeFeet(state),species:actor.appearance.speciesId,heading:state.heading,peckAge,floorContactAge},npcs.snapshot().states);
+          foodBoost=advanceFoodBoost(foodBoost,seconds,flock.playerEaten);
           const npcEvents=npcs.commit({frame:version,simTime:state.time,acceptedSeconds:seconds,playing:true},
             {x:s.camera.position[0],y:s.camera.position[1],z:s.camera.position[2]},
-            {...state,body,flap:raw.some(e=>e.raw.type==='flap'),coo});
+            {...state,body,speciesId:actor.appearance.speciesId,flap:raw.some(e=>e.raw.type==='flap'),coo},flock.flightStimuli());
           if(disposed)return;
+          for(const hit of vehicleProposal.hits)vehicleFeathers.burst(hit);
+          vehicleFeathers.update(state.time);
           lastEvents=envelope(raw,npcEvents);
           recentEvents.push(...lastEvents);if(recentEvents.length>64)recentEvents.splice(0,recentEvents.length-64);
           rawRecent.push(...raw.map(e=>e.raw));if(rawRecent.length>64)rawRecent.splice(0,rawRecent.length-64);
@@ -194,7 +243,7 @@ export function createNativeScene(parent:THREE.Scene,initialLook:LookId,options:
         if(disposed||version!==before){next.dispose();return false;}
         const previousOwner=birdOwner,index=parent.children.indexOf(previousOwner);
         if(index<0||previousOwner.parent!==parent){next.dispose();return false;}
-        actor=next;birdOwner=nextOwner;version++;lastEvents=[];map.forgetActor('player-bird');
+        actor=next;birdOwner=nextOwner;version++;lastEvents=[];map.forgetActor('player-bird');splash.clear();vehicles.clear();vehicleFeathers.clear();owlHunt.clear();
         parent.children[index]=nextOwner;nextOwner.parent=parent;previousOwner.parent=null;
         for(const notify of [()=>previousOwner.dispatchEvent({type:'removed'}),()=>parent.dispatchEvent({type:'childremoved',child:previousOwner}),
           ()=>nextOwner.dispatchEvent({type:'added'}),()=>parent.dispatchEvent({type:'childadded',child:nextOwner})]){
@@ -208,10 +257,10 @@ export function createNativeScene(parent:THREE.Scene,initialLook:LookId,options:
       const s=actor.snapshot(),state=s.state,body=state.body;
       return{state,sole:nativeFeet(state),look:legacy(s.appearance),appearance:s.appearance,posedEye:s.eye,camera:s.camera,cameraMode:s.view.mode,projection:s.projection,
         lastFailure,blockedFrames,sessionId,sequence,batchSequence,version,frameIndex,modeVisits:{...modeVisits},events:lastEvents,recentEvents:[...recentEvents],rawEvents:[...rawRecent],
-        body,tuning,mapStats:map.stats,quality:map.layout.quality,water:(mapQueries as MapNativeQueries).waterAt(nativeFeet(state)),waterPhase:Array.from(waterMesh.material.uniforms.uPhase.value as Float32Array),
-        modelMetrics:s.modelMetrics,rootPosition:s.rootPosition,pose:s.pose,landedAt:s.landedAt,calledAt:s.calledAt,core:{version:s.version,lastFrame:s.lastFrame,batch:s.batch,sequence:s.sequence,cameraOperation:s.cameraOperation,cleanupErrors:[...s.cleanupErrors,...sceneCleanupErrors]},
-        npcs:{...npcs.snapshot(),recentEvents:[...npcRecent]}};
+        body,tuning:state.tuning,foodBoost,mapStats:map.stats,quality:map.layout.quality,water:(mapQueries as MapNativeQueries).waterAt(nativeFeet(state)),waterPhase:Array.from(waterMesh.material.uniforms.uPhase.value as Float32Array),
+        waterSplash:splash.snapshot(),modelMetrics:s.modelMetrics,rootPosition:s.rootPosition,pose:s.pose,landedAt:s.landedAt,calledAt:s.calledAt,core:{version:s.version,lastFrame:s.lastFrame,batch:s.batch,sequence:s.sequence,cameraOperation:s.cameraOperation,cleanupErrors:[...s.cleanupErrors,...sceneCleanupErrors]},
+        owlHunt:owlHunt.snapshot(),vehicleImpacts:vehicles.snapshot(),vehicleFeathers:vehicleFeathers.snapshot(),traffic:traffic.snapshot(),flock:flock.snapshot(),npcs:{...npcs.snapshot(),recentEvents:[...npcRecent]}};
     },
-    dispose(){if(disposed)return;disposed=true;version++;actor.dispose();rememberNpcEvents(npcs.dispose());map.dispose();birdOwner.removeFromParent();},
+    dispose(){if(disposed)return;disposed=true;version++;actor.dispose();owlHunt.dispose();flock.dispose();vehicleFeathers.dispose();vehicles.clear();traffic.dispose();rememberNpcEvents(npcs.dispose());splash.dispose();clouds.dispose();map.dispose();birdOwner.removeFromParent();},
   };
 }

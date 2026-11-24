@@ -20,7 +20,7 @@ export interface NpcWorldAnchors {
 
 const TAU = 2 * Math.PI;
 const KINDS: ReadonlySet<unknown> = new Set(NPC_KINDS);
-const ACTIONS: ReadonlySet<unknown> = new Set(['idle', 'walk', 'look', 'avoid', 'startle']);
+const ACTIONS: ReadonlySet<unknown> = new Set(['idle', 'walk', 'look', 'avoid', 'startle', 'talk', 'duck']);
 function nonnegative(n: unknown): n is number {
   return typeof n === 'number' && Number.isFinite(n) && n >= 0;
 }
@@ -59,14 +59,16 @@ export function worldAnchors(state: NpcState | undefined): NpcWorldAnchors | und
 
 type Counts = Record<Shape, number>;
 function counts(): Counts { return { round: 0, block: 0, taper: 0, point: 0 }; }
-const PER_KIND = NPC_KINDS.map((kind) => {
-  const result = counts();
-  paintPose({ kind, action: 'idle', variant: 0, age: 0, gaitDistance: 0, speed: 0, bodyScale: 1 }, {
-    part(shape) { result[shape]++; },
-    link() { result.taper++; },
-  });
-  return result;
-});
+const PER_KIND = NPC_KINDS.flatMap(kind => [undefined, 'hanbok'].flatMap(humanOutfit =>
+  ['female', 'male'].map(humanGender => {
+    const result = counts();
+    paintPose({ kind, action: 'idle', variant: 0, age: 0, gaitDistance: 0, speed: 0, bodyScale: 1,
+      humanOutfit: humanOutfit as NpcState['humanOutfit'], humanGender: humanGender as NpcState['humanGender'] }, {
+      part(shape) { result[shape]++; },
+      link() { result.taper++; },
+    });
+    return result;
+  })));
 
 function makeGeometry(shape: Shape): THREE.BufferGeometry {
   switch (shape) {

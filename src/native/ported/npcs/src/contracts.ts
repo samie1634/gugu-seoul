@@ -1,6 +1,8 @@
 /** Metres, Y up, north/forward at heading zero is -Z. All positions are feet. */
+export type HumanRole = 'walker' | 'grandmother' | 'grandfather';
+export type HumanGender = 'female' | 'male';
 export type NpcKind = 'human' | 'dog' | 'cat' | 'rat';
-export type NpcAction = 'idle' | 'walk' | 'look' | 'avoid' | 'startle';
+export type NpcAction = 'idle' | 'walk' | 'look' | 'avoid' | 'startle' | 'talk' | 'duck';
 export type Surface = 'stone' | 'granite' | 'asphalt' | 'wood' | 'metal' | 'roof-tile' | 'water' | 'glass' | 'soil' | 'paving' | 'grass';
 export interface Point2 { readonly x: number; readonly z: number }
 export interface Point3 extends Point2 { readonly y: number }
@@ -17,9 +19,15 @@ export interface GroundSample {
   readonly surface: Surface;
   readonly layerId?: string;
 }
-export interface GroundContext { readonly referenceY?: number; readonly layerId?: string }
+export interface GroundContext {
+  readonly referenceY?: number;
+  readonly layerId?: string;
+  /** Human escape/return may leave route corridors, never terrain or traffic safety. */
+  readonly escape?: boolean;
+}
 export interface NpcWaypoint extends Point2 { readonly y?: number; readonly layerId?: string }
 export interface NpcRoute {
+  readonly humanOutfit?: 'hanbok';
   readonly id: string;
   readonly kinds: readonly NpcKind[];
   readonly points: readonly NpcWaypoint[];
@@ -32,6 +40,10 @@ export interface SpawnZone {
   readonly center: Point2;
   readonly radius: number;
   readonly capacity: number;
+  /** Authored local walking starts may be closer than the general distance ring. */
+  readonly minObserverDistance?: number;
+  /** Prefer this authored walk while its start is nearby; retain distant routes elsewhere. */
+  readonly priorityDistance?: number;
   readonly referenceY?: number;
   readonly layerId?: string;
 }
@@ -57,6 +69,7 @@ export interface NpcStimulus {
   readonly radius?: number;
   /** Upright body half-height; omitted means sphere with the supplied radius. */
   readonly halfHeight?: number;
+  readonly birdFlight?: { readonly species: string; readonly airborne: boolean; readonly velocity: Point3 };
 }
 export interface NpcFrame {
   /** Camera/player position: planar distance controls activation, even in flight. */
@@ -73,6 +86,15 @@ export interface NpcClockFrame {
 export interface NpcState extends Point3 {
   readonly id: string;
   readonly kind: NpcKind;
+  readonly talkPartnerId?: string;
+  readonly humanRole?: HumanRole;
+  /** Authored character metadata; independent of clothing and appearance. */
+  readonly humanGender?: HumanGender;
+  readonly humanOutfit?: 'hanbok';
+  /** Monotonic releases; one crumb for walkers, thirty for each elderly throw. */
+  readonly foodSequence?: number;
+  /** Seconds since an elderly feeding gesture began, or Infinity. */
+  readonly foodThrowAge?: number;
   readonly heading: number;
   readonly action: NpcAction;
   readonly speed: number;
@@ -94,13 +116,13 @@ interface EventBase {
   /** Frozen source-time pose. Retained after later ticks/despawn for voice anchors. */
   readonly state: NpcState;
 }
-export type NpcAudioCue = 'footstep' | 'rustle' | 'human-gasp' | 'dog-bark' | 'cat-mew' | 'rat-squeak';
+export type NpcAudioCue = 'footstep' | 'rustle' | 'human-gasp' | 'human-scream' | 'dog-bark' | 'cat-mew' | 'rat-squeak';
 export type NpcEvent = EventBase & (
   | { readonly type: 'spawn' }
   | { readonly type: 'despawn'; readonly reason: 'distance' | 'lifetime' | 'invalid-ground' | 'manual' | 'dispose' }
   | { readonly type: 'action'; readonly action: NpcAction; readonly previous: NpcAction }
   | { readonly type: 'proximity'; readonly phase: 'enter' | 'exit'; readonly targetId: string; readonly distance: number }
-  | { readonly type: 'reaction'; readonly response: 'look' | 'startle'; readonly targetId: string }
+  | { readonly type: 'reaction'; readonly response: 'look' | 'startle' | 'duck'; readonly targetId: string }
   | { readonly type: 'audio'; readonly cue: NpcAudioCue; readonly gain: number; readonly surface: Surface }
 );
 export interface NpcLimits { readonly human: number; readonly dog: number; readonly cat: number; readonly rat: number }

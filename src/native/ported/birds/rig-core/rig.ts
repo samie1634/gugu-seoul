@@ -103,6 +103,14 @@ export function createBirdRig(
       lastPose.callAge = input.callAge;
       lastPose.landing = input.landing;
       lastPose.reducedMotion = input.reducedMotion;
+      lastPose.foldedFall = input.foldedFall;
+      lastPose.peckAge = input.peckAge;
+      lastPose.foodPeckAge = input.foodPeckAge;
+      lastPose.opponentPeckAge = input.opponentPeckAge;
+      lastPose.fishStrikeAge = input.fishStrikeAge;
+      lastPose.fishStrikeHeight = input.fishStrikeHeight;
+      lastPose.roll = input.roll;
+      lastPose.flirtAge = input.flirtAge;
     },
     setLod(lod) {
       const previous = requireVisual();

@@ -29,13 +29,17 @@ test('actual scene replaces the static reference with native-scale humans/dogs/c
   for(let i=0;i<100;i++)s=h.step();
   assert.deepEqual(Object.keys(s.npcs.stats.counts).filter(k=>s.npcs.stats.counts[k]>0).sort(),['cat','dog','human','rat']);
   assert.equal(h.parent.children.filter(o=>o.name==='npc-models').length,1);
-  assert.equal(s.npcs.routes.length,39);assert.equal(s.npcs.spawnZones.length,5);assert.equal(s.npcs.excludedEdges.filter(e=>e.reason==='traffic').length,4);
+  assert.equal(s.npcs.routes.filter(id=>id.startsWith('map-edge:')).length,39);
+  assert.equal(s.npcs.routes.filter(id=>id.startsWith('feeding-walk:')).length,16);
+  assert.equal(s.npcs.spawnZones.filter(z=>z.id.startsWith('map-spawn:')).length,5);
+  assert.equal(s.npcs.spawnZones.filter(z=>z.id.startsWith('feeding-spawn:')).length,16);assert.equal(s.npcs.excludedEdges.filter(e=>e.reason==='traffic').length,4);
   assert.equal(s.npcs.modelStats.capacity,48);assert.deepEqual(s.npcs.rootScale,[1,1,1]);
   near(s.npcs.stats.time,s.state.time);assert.equal(s.npcs.acceptedCommits,100);assert.equal(s.npcs.drains,100);assert.equal(s.npcs.syncs,100);
   for(const a of s.npcs.states){
     assert.equal(a.bodyScale,1);assert.notEqual(a.id,'b2:reference-human');assert.notEqual(a.surface,'asphalt');assert.notEqual(a.surface,'water');
     const sample=h.scene.map.layout;
-    assert.ok(sample.navEdges.some(e=>a.routeId===`map-edge:${e.a}->${e.b}`&&!e.requiresTrafficCheck&&e.kind!=='crossing'));
+    assert.ok(sample.navEdges.some(e=>a.routeId===`map-edge:${e.a}->${e.b}`&&!e.requiresTrafficCheck&&e.kind!=='crossing') ||
+      s.npcs.spawnZones.some(zone=>zone.routeId===a.routeId&&zone.id.startsWith('feeding-spawn:')&&zone.kinds.includes(a.kind)));
     const anchors=worldAnchors(a);assert.deepEqual(anchors.sole,{x:a.x,y:a.y,z:a.z});assert.ok(anchors.eye.y>a.y);
   }
 });

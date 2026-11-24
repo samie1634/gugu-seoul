@@ -1,3 +1,4 @@
+import { createHeronBird } from '../../native/ported/birds/heron/models.ts';
 import type { Appearance } from '../../native/ported/shared-contracts.ts';
 import type { LookId } from '../../progress.ts';
 import type { BirdBuildOptions, BirdLod, BirdMorph, SpeciesId } from '../../native/ported/birds/rig-core/contract.ts';
@@ -12,6 +13,7 @@ const candidateLooks = {
   'tawny-owl': { species: 'tawny-owl', morph: 'default' },
   'eagle-owl': { species: 'eagle-owl', morph: 'default' },
   kestrel: { species: 'kestrel', morph: 'default' },
+  heron: { species: 'heron', morph: 'default' },
 } as const satisfies Record<string, { species: SpeciesId; morph: BirdMorph }>;
 
 export type CandidateLookId = keyof typeof candidateLooks;
@@ -49,6 +51,8 @@ export function createCandidateFactory(urban: BirdModelFactory, raptors: BirdMod
       case 'eagle-owl':
       case 'kestrel':
         return raptors(options);
+      case 'heron':
+        return createHeronBird(options);
       default:
         throw new RangeError('Unsupported bird species');
     }

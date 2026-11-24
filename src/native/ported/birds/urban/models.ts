@@ -1,3 +1,4 @@
+import { addFlirtWingShape } from '../rig-core/flirt-wing.ts';
 import * as THREE from 'three';
 import type { BirdBuildOptions, BirdLod, BirdModel, BirdPivots } from '../rig-core/contract.ts';
 import { formNormal, formPoint, Part, type Form, type Point } from './geometry.ts';
@@ -64,7 +65,7 @@ const resolution = [
 ] as const;
 const sides = [-1, 1] as const;
 
-function bodyGeometry(species: UrbanSpecies, profile: Profile, p: Palette, lod: BirdLod, white: boolean): THREE.BufferGeometry {
+function bodyGeometry(species: UrbanSpecies, profile: Profile, p: Palette, lod: BirdLod): THREE.BufferGeometry {
   const part = new Part();
   const d = resolution[lod];
   part.loft(profile.body, {
@@ -93,21 +94,26 @@ function bodyGeometry(species: UrbanSpecies, profile: Profile, p: Palette, lod: 
       return blend(base, p.sheen, 0.44 * smoothstep(dorsal, 0.1, 0.85));
     },
   });
-  if (profile.neck) {
+  if (profile.neck && species !== 'pigeon') {
     part.loft(profile.neck, {
       sides: d.shell,
       subdivisions: d.subdivisions,
-      paint: ([x, y], angle, z) => {
-        if (species !== 'pigeon' || white) {
-          return blend(p.head, p.back, 0.7 * (1 - smoothstep(Math.sin(angle), -0.5, 0.5)));
-        }
-        const violet = smoothstep(y + 0.45 * z - 0.34 * Math.abs(x), 0.108, 0.143);
-        const throat = blend(neckGreen, neckViolet, violet);
-        const sheen = smoothstep(y, 0.115, 0.158) * (1 - smoothstep(z, -0.067, -0.039));
-        return blend(blend(p.belly, p.head, smoothstep(y, 0.126, 0.161)), throat, sheen * 0.94);
-      },
+      paint: (_, angle) => blend(p.head, p.back, 0.7 * (1 - smoothstep(Math.sin(angle), -0.5, 0.5))),
     });
   }
+  return part.finish();
+}
+
+function pigeonNeckGeometry(profile: Profile, p: Palette, lod: BirdLod, white: boolean): THREE.BufferGeometry {
+  const part=new Part();
+  if(!profile.neck) return part.finish();
+  part.loft(profile.neck,{sides:resolution[lod].shell,subdivisions:resolution[lod].subdivisions,paint:([x,y],_angle,z)=>{
+    if(white)return blend(p.head,p.back,0.35);
+    const violet=smoothstep(y+0.45*z-0.34*Math.abs(x),0.108,0.143);
+    const throat=blend(neckGreen,neckViolet,violet);
+    const sheen=smoothstep(y,0.115,0.158)*(1-smoothstep(z,-0.067,-0.039));
+    return blend(blend(p.belly,p.head,smoothstep(y,0.115,0.158)),throat,sheen*0.94);
+  }});
   return part.finish();
 }
 
@@ -150,16 +156,22 @@ function headGeometry(species: UrbanSpecies, profile: Profile, p: Palette, lod: 
       return blend(p.head, p.back, 0.34 * smoothstep(top, -0.5, 0.75));
     },
   });
-  part.loft(profile.bill, {
+  const upperBill = species === 'pigeon' ? new Part() : part;
+  const lowerBill = species === 'pigeon' ? new Part() : null;
+  const upperForm = species === 'pigeon' ? profile.bill.map(([z,bottom,top,width,cx]) => [z,(bottom+top)/2,top,width,cx] as const) : profile.bill;
+  const lowerForm = species === 'pigeon' ? profile.bill.map(([z,bottom,top,width,cx]) => [z,bottom,(bottom+top)/2,width,cx] as const) : profile.bill;
+  const billPaint = (_: Point, angle: number) => {
+    const upper = Math.sin(angle);
+    const shine = color(white ? '#b6988e' : '#4d4d4e');
+    const enamel = blend(p.bill, shine, 0.25 * smoothstep(upper, 0.12, 0.9));
+    return blend(enamel, ink, 0.72 * (1 - smoothstep(Math.abs(upper), 0.0, 0.29)));
+  };
+  upperBill.loft(upperForm, {
     sides: d.details,
     subdivisions: d.subdivisions,
-    paint: (_, angle) => {
-      const upper = Math.sin(angle);
-      const shine = color(white ? '#b6988e' : '#4d4d4e');
-      const enamel = blend(p.bill, shine, 0.25 * smoothstep(upper, 0.12, 0.9));
-      return blend(enamel, ink, 0.72 * (1 - smoothstep(Math.abs(upper), 0.0, 0.29)));
-    },
+    paint: billPaint,
   });
+  lowerBill?.loft(lowerForm,{sides:d.details,subdivisions:d.subdivisions,paint:billPaint});
   if (species === 'pigeon') {
     const cere = color(white ? '#dfd2c5' : '#c8c3b6');
     part.ellipsoid([0, 0.019, -0.033], [0.0088, 0.0067, 0.0085], cere, d.details);
@@ -183,7 +195,8 @@ function headGeometry(species: UrbanSpecies, profile: Profile, p: Palette, lod: 
     const position = eye(part, profile, p, side, lod, species === 'pigeon' && !white);
     if (side === 1) rightEye = position;
   }
-  return { geometry: part.finish(), eye: rightEye.add(new THREE.Vector3(...profile.headAt)).toArray() };
+  return { geometry: part.finish(), upperBill: species === 'pigeon' ? upperBill.finish() : null,
+    lowerBill: lowerBill?.finish() ?? null, eye: rightEye.add(new THREE.Vector3(...profile.headAt)).toArray() };
 }
 
 type VanePaint = (t: number, angle: number) => THREE.Color;
@@ -424,10 +437,25 @@ export function createUrbanBird({ species, lod, morph: inputMorph }: BirdBuildOp
       leftFoot: pivot('leftFoot', profile.footAt, -1),
       rightFoot: pivot('rightFoot', profile.footAt),
     };
-    attach(root, own(bodyGeometry(species, profile, p, lod, white)), 'body');
+    attach(root, own(bodyGeometry(species, profile, p, lod)), 'body');
+    if(species==='pigeon' && profile.neck){
+      const neck=new THREE.Group();neck.name='neck';neck.position.set(0,0.10,-0.05);root.add(neck);
+      const neckGeometry=pigeonNeckGeometry(profile,p,lod,white);neckGeometry.translate(0,-0.10,0.05);
+      attach(neck,own(neckGeometry),'neck-mesh');
+      // Preserve the bind transform while making head and beak children of the neck.
+      root.updateMatrixWorld(true);
+      const headJoint=new THREE.Group();headJoint.name='head-joint';headJoint.position.set(0,0.053,-0.02);neck.add(headJoint);
+      root.updateMatrixWorld(true);headJoint.attach(pivots.head);
+    }
     const head = headGeometry(species, profile, p, lod, white);
     attach(pivots.head, own(head.geometry), 'head');
+    if(head.upperBill && head.lowerBill){
+      attach(pivots.head,own(head.upperBill),'upper-beak');
+      const jaw=new THREE.Group();jaw.name='lower-beak';jaw.position.set(0,0.013,-0.025);
+      head.lowerBill.translate(0,-0.013,0.025);attach(jaw,own(head.lowerBill),'lower-beak-mesh');pivots.head.add(jaw);
+    }
     const wing = own(wingGeometry(species, profile, p, lod, white));
+    if (species === 'pigeon') addFlirtWingShape(wing);
     attach(pivots.leftWing, wing, 'leftWing', true);
     attach(pivots.rightWing, wing, 'rightWing');
     attach(pivots.tail, own(tailGeometry(species, profile, p, lod, white)), 'tail');

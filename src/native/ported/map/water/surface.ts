@@ -201,7 +201,7 @@ void main() {
     colour += irradiance * (lit * shine * max(0.0, dot(normal, sun)));
   #endif
   colour += vec3(0.65, 0.84, 0.78) * min(0.055, ripples.z) * mix(0.3, 1.0, lit);
-  gl_FragColor = vec4(colour, 1.0);
+  gl_FragColor = vec4(colour, mix(0.34, 0.9, fresnel));
 
   #include <tonemapping_fragment>
   #include <colorspace_fragment>

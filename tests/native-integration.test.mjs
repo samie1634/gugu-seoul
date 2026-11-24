@@ -9,6 +9,7 @@ import { transactNativeFrame } from '../src/native/frame-transaction.ts';
 import { makeMapLayout } from '../src/native/ported/map/layout.ts';
 import { createMapQueries } from '../src/native/ported/motion/locomotion/b2/map-queries.ts';
 import { nativeNear } from '../src/native/body-profile.ts';
+import { PIGEON_PLAYER_TUNING } from '../src/pigeon-kinematics.ts';
 
 class ElementStub extends EventTarget {
   captured = new Set();
@@ -94,9 +95,9 @@ test('real Controls tap/hold/landing consumes one clock and one canonical event 
   const h = harness(t); key('keydown', 'Space'); h.frame(0);
   for (let i = 0; i < 25; i++) { key('keydown', 'Space', true); assert.equal(h.step().status, 'committed'); }
   assert.equal(h.engine.state.flaps, 1); assert.equal(h.engine.state.mode, 'glide');
-  key('keyup', 'Space'); key('keydown', 'ShiftLeft');
+  key('keyup', 'Space'); key('keydown', 'KeyC');
   for (let i = 0; i < 240 && !h.engine.state.grounded; i++) h.step();
-  key('keyup', 'ShiftLeft'); assert.equal(h.engine.state.grounded, true);
+  key('keyup', 'KeyC'); assert.equal(h.engine.state.grounded, true);
   for (let i = 0; i < 20; i++) h.step();
   const snapshot = h.engine.snapshot(); const flaps = snapshot.recentEvents.filter(event => event.type === 'flap'); const lands = snapshot.recentEvents.filter(event => event.type === 'land');
   assert.equal(flaps.length, 1); assert.equal(lands.length, 1); assert.ok(lands[0].supportId); assert.ok(lands[0].impactSpeed >= 0);
@@ -169,14 +170,17 @@ test('actual native eye and near volume resolve in desktop, portrait and landsca
 test('native close focus keeps a verified wall contact reversible without changing eye height or body size', t => {
   const h = harness(t, { preset: 'wall' }); h.frame(0);
   const body = { ...h.engine.state.body };
+  // Exercise the same travel budget at the new measured walk speed, retaining
+  // the original verified contact and reverse-distance/camera assertions.
+  const travelFrames = meters => Math.ceil(60 * (meters / PIGEON_PLAYER_TUNING.walkSpeed + .2));
   key('keydown', 'KeyW');
-  for (let i = 0; i < 180; i++) assert.equal(h.step().status, 'committed');
+  for (let i = 0; i < travelFrames(2.7); i++) assert.equal(h.step().status, 'committed');
   key('keyup', 'KeyW');
   const contactZ = h.engine.state.z;
   assert.ok(contactZ > -179.5);
   assert.equal(h.engine.queries.sweepBody(h.engine.state, h.engine.state, h.engine.state.body), null);
   key('keydown', 'KeyS');
-  for (let i = 0; i < 75; i++) assert.equal(h.step().status, 'committed');
+  for (let i = 0; i < travelFrames(1.125); i++) assert.equal(h.step().status, 'committed');
   key('keyup', 'KeyS');
   assert.ok(h.engine.state.z < contactZ - 0.7);
   assert.deepEqual(h.engine.state.body, body);
@@ -189,9 +193,9 @@ test('native close focus keeps a verified wall contact reversible without changi
 
 test('real tap and descent settle on the precise roof ridge and retain support after inertia stops', t => {
   const h = harness(t, { preset: 'roof' }); h.frame(0); h.step();
-  key('keydown', 'Space'); h.step(); key('keyup', 'Space'); key('keydown', 'ShiftLeft');
+  key('keydown', 'Space'); h.step(); key('keyup', 'Space'); key('keydown', 'KeyC');
   for (let i = 0; i < 180; i++) assert.equal(h.step().status, 'committed');
-  key('keyup', 'ShiftLeft');
+  key('keyup', 'KeyC');
   const s = h.engine.snapshot();
   assert.equal(s.state.grounded, true); assert.equal(s.state.mode, 'rest');
   assert.equal(s.state.support.id, 'gate:upper-roof'); near(s.sole.y, 20);

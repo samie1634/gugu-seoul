@@ -1,0 +1,69 @@
+{
+  "checked": "2026-11-07",
+  "source": "New third-party public downloads, not user files",
+  "licenseConditions": "Free use and modification without required attribution; no standalone resale/redistribution. These are integrated game sound effects, no new download UI.",
+  "records": [
+    {
+      "kind": "sparrow",
+      "sourceUrl": "https://pixabay.com/sound-effects/nature-house-sparrow-31116/",
+      "downloadUrl": "https://cdn.pixabay.com/download/audio/2022/03/10/audio_6203bdeea9.mp3?filename=freesound_community-house-sparrow-31116.mp3",
+      "creator": "BeeProductive (Freesound)",
+      "sha256": "3bb57496bbaebfc286dc7aa699380a20398b323127c2945b3d4c8d15c6464a74",
+      "bytes": 1243200,
+      "path": "public/species-audio/assets/pixabay-birds-v1/sparrow.mp3",
+      "license": "Pixabay Content License",
+      "licenseUrl": "https://pixabay.com/service/license-summary/",
+      "durationSeconds": 62.16,
+      "processing": "Original unchanged MP3; no synthesis; playback rate1",
+      "identityEvidence": "Source page title/description and named uploader. Not independent biological acoustic verification.",
+      "playbackSegment": {
+        "offsetSeconds": 0.4,
+        "durationSeconds": 8,
+        "gainEnvelope": "10ms fade in,30ms fade out"
+      },
+      "identityCaveat": "House sparrow (Passer domesticus), not claimed Korean tree sparrow (Passer montanus)."
+    },
+    {
+      "kind": "crow",
+      "sourceUrl": "https://pixabay.com/sound-effects/nature-crow-sound-94874/",
+      "downloadUrl": "https://cdn.pixabay.com/download/audio/2022/03/17/audio_a3e9baaeb5.mp3?filename=freesound_community-crow-sound-94874.mp3",
+      "creator": "hardwareshaba (Freesound)",
+      "sha256": "9bb50ed0a63ae008281507a6fbfcbf978e865b04c2bfb67cf6bde70bb8ca1a2c",
+      "bytes": 10560,
+      "path": "public/species-audio/assets/pixabay-birds-v1/crow.mp3",
+      "license": "Pixabay Content License",
+      "licenseUrl": "https://pixabay.com/service/license-summary/",
+      "durationSeconds": 0.528,
+      "processing": "Original unchanged MP3; no synthesis; playback rate1",
+      "identityEvidence": "Source page title/description and named uploader. Not independent biological acoustic verification."
+    },
+    {
+      "kind": "tawny-owl",
+      "sourceUrl": "https://pixabay.com/sound-effects/film-special-effects-tawny-owl-in-molkom-sweden-99897/",
+      "downloadUrl": "https://cdn.pixabay.com/download/audio/2022/03/24/audio_cb93bc9d9c.mp3?filename=freesound_community-tawny-owl-in-molkom-sweden-99897.mp3",
+      "creator": "Marcuspepsi (Freesound)",
+      "sha256": "176972660892deb03f3ed1a66d99e94dc61154338c013b9395da3daeef265a62",
+      "bytes": 177120,
+      "path": "public/species-audio/assets/pixabay-birds-v1/tawny-owl.mp3",
+      "license": "Pixabay Content License",
+      "licenseUrl": "https://pixabay.com/service/license-summary/",
+      "durationSeconds": 8.856,
+      "processing": "Original unchanged MP3; no synthesis; playback rate1",
+      "identityEvidence": "Source page title/description and named uploader. Not independent biological acoustic verification."
+    },
+    {
+      "kind": "eagle-owl",
+      "sourceUrl": "https://pixabay.com/sound-effects/nature-eagle-owl-75483/",
+      "downloadUrl": "https://cdn.pixabay.com/download/audio/2022/03/15/audio_3c0cf5b61d.mp3?filename=freesound_community-eagle-owl-75483.mp3",
+      "creator": "greither (Freesound)",
+      "sha256": "3d4b1d5658cc8311cc369331d8c10b5e3031942d6dbc4c45f2ea5ea6abba3cc0",
+      "bytes": 306720,
+      "path": "public/species-audio/assets/pixabay-birds-v1/eagle-owl.mp3",
+      "license": "Pixabay Content License",
+      "licenseUrl": "https://pixabay.com/service/license-summary/",
+      "durationSeconds": 15.336,
+      "processing": "Original unchanged MP3; no synthesis; playback rate1",
+      "identityEvidence": "Source page title/description and named uploader. Not independent biological acoustic verification."
+    }
+  ]
+}

@@ -1,0 +1,73 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import * as THREE from 'three';
+import { createNativeScene } from '../src/native/scene.ts';
+import { nativeNear } from '../src/native/body-profile.ts';
+import { PIGEON_ASSET_HEIGHT, PIGEON_CYCLE_DISTANCE } from '../src/pigeon-ground.ts';
+import { PIGEON_PLAYER_TUNING, PIGEON_AUTO_PECK_EXTENSION, pigeonAutoPeckClipAge, pigeonPeckClockDelta } from '../src/pigeon-kinematics.ts';
+
+const dt = 1/60;
+const empty = { forward: 0, turn: 0, flapPressed: false, flapHeld: false, descend: false };
+const near = (a,b,tolerance=1e-8) => assert.ok(Math.abs(a-b) < tolerance,`${a} != ${b}`);
+
+test('the default native scene slows actual pigeon translation and launches progressively without changing the accepted input/event path', t => {
+  const engine = createNativeScene(new THREE.Scene(), 'pigeon', { mapData:'osm', quality:'mobile', sessionId:'pigeon-kinematic-test' });
+  t.after(()=>engine.dispose());
+  const logs=[];
+  const tick=(changes={})=>{
+    const lens={ near:nativeNear(engine.state.body,59,16/9),verticalFovDegrees:59,aspect:16/9 };
+    const frame=engine.prepare({...empty,...changes},dt,lens,'third',10 + engine.state.time + dt,false);
+    assert.equal(frame.kind,'ready',frame.reason);
+    frame.commit();
+    logs.push(...engine.events);
+    return engine.state;
+  };
+  const start=engine.state;
+  for(let i=0;i<72;i++) tick({forward:1});
+  const walked=engine.state;
+  const groundDistance=Math.hypot(walked.x-start.x,walked.z-start.z);
+  assert.ok(groundDistance>=.205 && groundDistance<=.23,`actual ground distance ${groundDistance}`);
+  assert.ok(walked.grounded);
+  near(walked.tuning.walkSpeed,.19);
+  const stride=PIGEON_CYCLE_DISTANCE*walked.body.heightM/PIGEON_ASSET_HEIGHT;
+  const stepHz=2*walked.tuning.walkSpeed/stride;
+  assert.ok(stepHz>2.9&&stepHz<3.05,`cycle-derived cadence ${stepHz}`);
+  for(let i=0;i<36;i++) tick();
+  const at=engine.state;
+  const launch=tick({flapPressed:true,flapHeld:true});
+  assert.equal(launch.grounded,false);
+  assert.ok(Math.hypot(launch.vx,launch.vz)>1.4&&Math.hypot(launch.vx,launch.vz)<1.7);
+  assert.ok(launch.y>at.y&&launch.y-at.y<.125);
+  for(let i=1;i<26;i++)tick({flapHeld:true});
+  const early=engine.state;
+  assert.ok(early.takeoffAge!==null && !early.grounded);
+  assert.ok(Math.hypot(early.vx,early.vz)>2.6&&Math.hypot(early.vx,early.vz)<4.6);
+  assert.ok(Math.hypot(early.x-at.x,early.z-at.z)>.8&&Math.hypot(early.x-at.x,early.z-at.z)<1.5);
+  for(let i=26;i<31;i++)tick({flapHeld:true});
+  const endOfLaunch=engine.state;
+  const endSpeed=Math.hypot(endOfLaunch.vx,endOfLaunch.vz);
+  assert.ok(endSpeed>4 && endSpeed<4.5, `takeoff end speed ${endSpeed}`);
+  for(let i=31;i<64;i++)tick({flapHeld:true});
+  const glide=engine.state;
+  assert.ok(glide.takeoffAge===null);
+  assert.ok(glide.tuning.glideSpeed===10);
+  assert.ok(Math.hypot(glide.vx,glide.vz)>7.5&&Math.hypot(glide.vx,glide.vz)<10);
+  for(let i=0;i<240&&!engine.state.grounded;i++) tick({descend:true});
+  assert.ok(engine.state.grounded);
+  assert.equal(logs.filter(e=>e.type==='flap').length,1);
+  assert.equal(logs.filter(e=>e.type==='land').length,1);
+  assert.equal(new Set(logs.map(e=>e.id)).size,logs.length);
+});
+
+test('manual target/ground keep their shared hit clock and automatic peck spends extra time aiming without stretching inter-hit timings', () => {
+  near(pigeonPeckClockDelta('pigeon',.30),.21);
+  near(pigeonPeckClockDelta('white',.15/.7),.15);
+  near(pigeonPeckClockDelta('owl',.21),.21);
+  const duration=2.333333;
+  near(pigeonAutoPeckClipAge(.71,duration),.55);
+  near(pigeonAutoPeckClipAge(.79,duration),.63);
+  near(pigeonAutoPeckClipAge(1.28,duration),1.12);
+  near(pigeonAutoPeckClipAge(1.74,duration),1.58);
+  near(pigeonAutoPeckClipAge(duration+PIGEON_AUTO_PECK_EXTENSION,duration),duration);
+  near(PIGEON_PLAYER_TUNING.flightSpeed,8);
+});

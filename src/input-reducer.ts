@@ -2,8 +2,8 @@ import type { FlightInput } from './simulation.ts';
 import { INACTIVE_PLAY_GATE, isPlaying, type PlayGate } from './frame-clock.ts';
 
 export type StickAxes = readonly [x: number, y: number];
-export type TouchControl = 'stick' | 'flap' | 'descend';
-export type InputCommand = 'coo' | 'view' | 'pause';
+export type TouchControl = 'stick' | 'flap' | 'descend' | 'peck';
+export type InputCommand = 'coo' | 'peck' | 'flirt' | 'view' | 'pause';
 export interface PointerOwner {
   readonly id: number;
   readonly control: TouchControl;
@@ -12,10 +12,11 @@ export interface PointerOwner {
 export type InputEvent =
   | { type: 'gate'; gate: PlayGate }
   | { type: 'reset' }
+  | { type: 'peck-tap' | 'flap-tap' }
   | { type: 'key-down'; code: string; repeat: boolean; fromDialog?: boolean }
   | { type: 'key-up'; code: string }
   | { type: 'pointer-down'; id: number; control: 'stick'; axes: StickAxes }
-  | { type: 'pointer-down'; id: number; control: 'flap' | 'descend' }
+  | { type: 'pointer-down'; id: number; control: 'flap' | 'descend' | 'peck' }
   | { type: 'pointer-move'; id: number; axes: StickAxes }
   | { type: 'pointer-up' | 'pointer-cancel' | 'lost-pointer-capture'; id: number; control: TouchControl };
 
@@ -28,6 +29,7 @@ export interface InputState {
   readonly pointers: readonly PointerOwner[];
   readonly stick: StickAxes;
   readonly flapEdge: FlapEdge | null;
+  readonly peckRelease: boolean;
 }
 
 export interface InputUpdate {
@@ -44,18 +46,19 @@ export interface InputSample {
 const neutralStick: StickAxes = Object.freeze([0, 0]);
 const gameKeys = new Set([
   'KeyW', 'KeyS', 'KeyA', 'KeyD', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight',
-  'Space', 'ShiftLeft', 'ShiftRight', 'KeyC', 'KeyV',
+  'Space', 'ShiftLeft', 'ShiftRight', 'KeyC', 'KeyF', 'KeyV', 'KeyQ', 'KeyE', 'KeyR', 'KeyT',
 ]);
 const nativeScrollKeys = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space']);
 
 export function createInputState(gate: PlayGate = INACTIVE_PLAY_GATE): InputState {
-  return { gate: { ...gate }, keys: [], escapeHeld: false, pointers: [], stick: neutralStick, flapEdge: null };
+  return { gate: { ...gate }, keys: [], escapeHeld: false, pointers: [], stick: neutralStick, flapEdge: null, peckRelease: false };
 }
 
 const update = (state: InputState, preventDefault = false, command: InputCommand | null = null): InputUpdate =>
   ({ state, preventDefault, command });
 
 const canTogglePause = (gate: PlayGate): boolean => gate.enabled && gate.focused && !gate.hidden;
+const peckHeld = (state: InputState): boolean => state.keys.includes('KeyR') || state.pointers.some(pointer => pointer.control === 'peck');
 const flapHeld = (state: InputState): boolean => state.keys.includes('Space') ||
   state.pointers.some(pointer => pointer.control === 'flap');
 
@@ -73,9 +76,13 @@ export function reduceInput(state: InputState, event: InputEvent): InputUpdate {
       return update({ ...next, escapeHeld: state.escapeHeld && canTogglePause(event.gate) });
     }
     case 'reset': return update(createInputState(state.gate));
+    case 'peck-tap': return isPlaying(state.gate) ? update(state, true, 'peck') : update(state);
+    case 'flap-tap': return isPlaying(state.gate) && !flapHeld(state) && state.flapEdge === null
+      ? update({ ...state, flapEdge: 'confirmed' }, true) : update(state);
     case 'key-up':
       if (event.code === 'Escape') return update({ ...state, escapeHeld: false });
-      return update({ ...state, keys: state.keys.filter(code => code !== event.code) });
+      const keys = state.keys.filter(code => code !== event.code);
+      return update({ ...state, keys, peckRelease: state.peckRelease || (event.code === 'KeyR' && state.keys.includes('KeyR') && !state.pointers.some(p => p.control === 'peck')) });
     case 'key-down': {
       const { code, repeat, fromDialog } = event;
       if (code === 'Escape') {
@@ -88,7 +95,7 @@ export function reduceInput(state: InputState, event: InputEvent): InputUpdate {
       if (repeat || state.keys.includes(code)) return update(state, preventDefault);
       const flapEdge = code === 'Space' && !flapHeld(state) ? state.flapEdge ?? 'confirmed' : state.flapEdge;
       return update({ ...state, keys: [...state.keys, code], flapEdge }, preventDefault,
-        code === 'KeyC' ? 'coo' : code === 'KeyV' ? 'view' : null);
+        code === 'KeyF' ? 'coo' : code === 'KeyR' ? 'peck' : code === 'KeyT' ? 'flirt' : code === 'KeyV' ? 'view' : null);
     }
     case 'pointer-down': {
       if (!isPlaying(state.gate) || state.pointers.some(owner => owner.id === event.id ||
@@ -99,7 +106,7 @@ export function reduceInput(state: InputState, event: InputEvent): InputUpdate {
         ...state, flapEdge,
         pointers: [...state.pointers, { id: event.id, control: event.control }],
         stick: event.control === 'stick' ? normalizeStick(event.axes) : state.stick,
-      }, true);
+      }, event.control !== 'peck');
     }
     case 'pointer-move':
       if (!state.pointers.some(owner => owner.id === event.id && owner.control === 'stick')) return update(state);
@@ -117,7 +124,9 @@ export function reduceInput(state: InputState, event: InputEvent): InputUpdate {
         if (event.type === 'pointer-up' || state.keys.includes('Space')) flapEdge = 'confirmed';
         else flapEdge = otherFlap ? { pointerId: otherFlap.id } : null;
       }
-      return update({ ...state, pointers, flapEdge, stick: event.control === 'stick' ? neutralStick : state.stick });
+      const peckRelease = state.peckRelease || (event.type === 'pointer-up' && event.control === 'peck' && !peckHeld({ ...state, pointers }));
+      return update({ ...state, pointers, flapEdge, peckRelease, stick: event.control === 'stick' ? neutralStick : state.stick }, false,
+        event.type === 'pointer-up' && event.control === 'peck' && isPlaying(state.gate) ? 'peck' : null);
     }
   }
 }
@@ -128,13 +137,18 @@ export function sampleInput(state: InputState): InputSample {
   const active = isPlaying(state.gate);
   const key = (...codes: string[]): number => active && codes.some(code => state.keys.includes(code)) ? 1 : 0;
   return {
-    state: state.flapEdge === null ? state : { ...state, flapEdge: null },
+    state: state.flapEdge === null && !state.peckRelease ? state : { ...state, flapEdge: null, peckRelease: false },
     input: {
       forward: active ? clampAxis(key('KeyW', 'ArrowUp') - key('KeyS', 'ArrowDown') - state.stick[1]) : 0,
       turn: active ? clampAxis(key('KeyD', 'ArrowRight') - key('KeyA', 'ArrowLeft') + state.stick[0]) : 0,
+      cameraTurn: active ? clampAxis(key('ArrowRight') - key('ArrowLeft') + state.stick[0]) : 0,
+      roll: active ? key('KeyQ') - key('KeyE') : 0,
       flapPressed: active && state.flapEdge !== null,
       flapHeld: active && flapHeld(state),
-      descend: active && (key('ShiftLeft', 'ShiftRight') === 1 || state.pointers.some(owner => owner.control === 'descend')),
+      descend: active && (key('KeyC') === 1 || state.pointers.some(owner => owner.control === 'descend')),
+      peckHeld: active && peckHeld(state),
+      peckReleased: active && state.peckRelease,
+      accelerate: active && key('ShiftLeft', 'ShiftRight') === 1,
     },
   };
 }

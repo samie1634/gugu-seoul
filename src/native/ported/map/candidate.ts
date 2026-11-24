@@ -1,3 +1,4 @@
+import { createRealMapCandidate } from './real-map/render.ts';
 import * as THREE from 'three';
 import { Painter } from '../../../geometry.ts';
 import type { LandingSurface, MapActor, MapLayout, MapOptions, MapSurfaceEvent, RoofSpec } from './contracts.ts';
@@ -21,6 +22,7 @@ export interface MapCandidate {
 
 /** Standalone STATIC-map replacement candidate. Does not attach itself to a scene. */
 export function createMapCandidate(options: MapOptions = {}): MapCandidate {
+  if(options.data==='osm')return createRealMapCandidate(options);
   const layout = makeMapLayout(options);
   const reference=layout.proportions==='reference-scale';
   const sessionId=options.eventSessionId ?? globalThis.crypto.randomUUID();
@@ -48,11 +50,37 @@ export function createMapCandidate(options: MapOptions = {}): MapCandidate {
   for (const b of layout.buildings) {
     const base = b.palette === 'limestone' ? '#c9c2af' : b.palette === 'brick' ? '#8e776a' : '#b4b9b5';
     const material: MaterialKey = b.palette === 'brick' ? 'masonry' : 'concrete';
-    box(material,b.x,b.height/2,b.z,b.width,b.height,b.depth,base);
+    const openedShop = b.id.startsWith('jongno-shop:');
+    const levels = Math.floor((b.height - 2.5) / 3.7);
+    if (openedShop && levels > 0) {
+      // A real front wall with openings, not a pane painted over a solid box.
+      const wall = 0.35, front = b.z-b.depth/2;
+      box(material,b.x,b.height/2,b.z+b.depth/2-wall/2,b.width,b.height,wall,base);
+      for (const side of [-1,1]) box(material,b.x+side*(b.width/2-wall/2),b.height/2,b.z,wall,b.height,b.depth,base);
+      const paneH=2.25, panes=Math.max(1,Math.floor((b.width-3)/5.8)), pitch=(b.width-3)/panes, paneW=pitch*0.62;
+      let last=0;
+      for(let floor=0;floor<levels;floor+=1){
+        const y=3.8+floor*3.7, bottom=y-paneH/2, top=y+paneH/2;
+        box(material,b.x,(last+bottom)/2,front+wall/2,b.width,bottom-last,wall,base);
+        let edge=-b.width/2;
+        for(let i=0;i<panes;i+=1){
+          const center=-b.width/2+1.5+(i+0.5)*pitch, left=center-paneW/2, right=center+paneW/2;
+          box(material,b.x+(edge+left)/2,y,front+wall/2,left-edge,paneH,wall,base);
+          edge=right;
+        }
+        box(material,b.x+(edge+b.width/2)/2,y,front+wall/2,b.width/2-edge,paneH,wall,base);
+        const floorY=bottom-0.15;
+        box('concrete',b.x,floorY,b.z,b.width-wall*2,0.2,b.depth-wall*2,'#a7afb5');
+        box('wood',b.x,bottom+0.7,front+2.4,2.1,0.12,1.0,'#8b7866');
+        for(const dx of [-0.9,0.9]) for(const dz of [-0.38,0.38])
+          box('wood',b.x+dx,bottom+0.35,front+2.4+dz,0.09,0.7,0.09,'#756555');
+        last=top;
+      }
+      box(material,b.x,(last+b.height)/2,front+wall/2,b.width,b.height-last,wall,base);
+    } else box(material,b.x,b.height/2,b.z,b.width,b.height,b.depth,base);
     box('masonry',b.x,b.height+0.225,b.z,b.width+0.5,0.45,b.depth+0.5,'#c6c6bc');
     box('metal',b.x+b.width*0.16,b.height+1.725,b.z-b.depth*0.12,b.width*0.25,2.55,b.depth*0.24,'#848e8a');
-    // Opaque, original glass panes; no photographic windows or advertising.
-    const levels = Math.floor((b.height - 2.5) / 3.7);
+    // Original panes; the shop fronts have actual openings behind their glass.
     for (let floor = 0; floor < levels; floor += 1) {
       const y = 3.8 + floor*3.7; const paneH = b.facade === 'curtain' ? 2.9 : 2.25;
       for (let side = 0; side < 4; side += 1) {
@@ -161,7 +189,8 @@ export function createMapCandidate(options: MapOptions = {}): MapCandidate {
       if(previous && time<=previous.time)return [];
       const centreToSole=geometry?.centreToSoleM??actor.centreToSole??actor.radius;
       const feet=actor.y-centreToSole;
-      const wet=sampleWater(layout,actor.x,feet,actor.z);
+      const nearWater=sampleWater(layout,actor.x,feet,actor.z);
+      const wet=nearWater&&feet<=nearWater.y+.000002?nearWater:null;
       const events:MapSurfaceEvent[]=[];
       const emit=(type:MapSurfaceEvent['type'],targetId:string,surface:MapSurfaceEvent['surface'],strength:number,y=feet)=>events.push({type,producer:'map',sessionId,sequence:++sequence,eventId:`${sessionId}:map:${sequence}`,actorId:actor.id,targetId,x:actor.x,y,z:actor.z,surface,strength,time});
       if(wet && !previous?.water){emit('water-enter',wet.id,'water',0.6,wet.y);water.addRipple(actor.x,actor.z,time,0.7);}
@@ -188,9 +217,10 @@ export function createMapCandidate(options: MapOptions = {}): MapCandidate {
 }
 
 function tree(wood:Painter,foliage:Painter,x:number,z:number,scale:number):void{
-  wood.cylinder(x,3.4*scale,z,0.34*scale,6.8*scale,'#756b5a',9);
-  foliage.ellipsoid(x,8.1*scale,z,3.8*scale,4.1*scale,3.4*scale,'#7c8d63',10);
-  foliage.ellipsoid(x+1.5*scale,7.2*scale,z+1.1*scale,2.8*scale,2.9*scale,2.5*scale,'#8f9a6e',9);
+  wood.cylinder(x,3.4*scale,z,0.34*scale,6.8*scale,'#71675b',12);
+  const clusters=[[-2.2,7.2,-0.5,2.1],[-1,9,-1.1,2.4],[1.3,8.8,-0.9,2.5],[2.2,7.4,0.8,2.1],[0,7.4,1.6,2.5],[-1.6,7.8,1.2,2.0],[0,10.1,0,2.2]];
+  const colors=['#526d57','#617c61','#6c8769','#5a755d','#78906e','#5d7962','#6b8368'];
+  clusters.forEach(([dx,y,dz,r],i)=>foliage.ellipsoid(x+dx*scale,y*scale,z+dz*scale,r*scale,r*0.9*scale,r*0.9*scale,colors[i],9));
 }
 function makeRoof(roof:RoofSpec,roofPainter:Painter,wood:Painter):void{
   const vertices:number[]=[]; const cols=ROOF_RENDER_SEGMENTS; const rows=ROOF_RENDER_SEGMENTS;

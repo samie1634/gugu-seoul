@@ -14,7 +14,7 @@ export const NPC_KINDS: readonly NpcKind[] = ['human', 'dog', 'cat', 'rat'];
 export const HARD_MAX_NPCS = 48;
 export const FIXED_STEP = 1 / 20;
 export const MAX_FRAME_SECONDS = 0.1;
-export const DEFAULT_LIMITS: NpcLimits = Object.freeze({ human: 18, dog: 4, cat: 5, rat: 7 });
+export const DEFAULT_LIMITS: NpcLimits = Object.freeze({ human: 20, dog: 4, cat: 5, rat: 7 });
 /** Draft metre proportions, not approved final anatomy; use the shared bodyScale. */
 export const PROFILES: Readonly<Record<NpcKind, NpcProfile>> = Object.freeze({
   human: Object.freeze({ kind: 'human', radius: 0.32, height: 1.8, walkSpeed: 1.15, fleeSpeed: 1.85, reactionRadius: 2.4, stride: 1.25, maxStep: 0.20, pauseChance: 0.22, acceleration: 1.8, turnRate: 2.8 }),

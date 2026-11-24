@@ -1,9 +1,10 @@
 import type { NpcKind, NpcState } from '../src/contracts.ts';
+import { HUMAN_CHARACTERS } from '../src/human-characters.ts';
 import { PROFILES } from '../src/profiles.ts';
 
 export const SHAPES = ['round', 'block', 'taper', 'point'] as const;
 export type Shape = (typeof SHAPES)[number];
-export type PoseInput = Pick<NpcState, 'kind' | 'variant' | 'action' | 'speed' | 'gaitDistance' | 'age' | 'bodyScale'>;
+export type PoseInput = Pick<NpcState, 'kind' | 'variant' | 'action' | 'speed' | 'gaitDistance' | 'age' | 'bodyScale' | 'humanRole' | 'foodThrowAge' | 'humanGender' | 'humanOutfit'>;
 export type BodyRegion = 'torso' | 'head' | 'limbs' | 'tail';
 type AnchorName = 'body' | 'eye' | 'voice';
 type Anchor = readonly [x: number, y: number, z: number];
@@ -26,6 +27,8 @@ const PANTS = [0x383e46, 0x44464a, 0x484e57, 0x383d49, 0x484a40, 0x424851, 0x484
 const CAPS = [0x34424f, 0x624940, 0x3e514a, 0x404055, 0x674f3e, 0x434e38, 0x58464c, 0x34454e];
 const CLAY = [0xc7a590, 0xb68d72, 0xd6b89d, 0xbd9a82, 0xa9826c, 0xc7a590, 0xd0ad98, 0xc09a81];
 const SOLE = 0x30333a;
+const HANBOK_TOP = [0xf2debb, 0xc8e1d4, 0xf0ced5, 0xd9d1eb, 0xf5e9cf, 0xb9d9e3, 0xe8d9ef, 0xcce0c2];
+const HANBOK_BOTTOM = [0xb94665, 0x406f8e, 0x538c7f, 0x9d5674, 0x607aa3, 0x735796, 0xb07743, 0x477b73];
 
 function sizeVariant(s: PoseInput): number {
   return (s.kind === 'human' ? HUMAN_SCALE : ANIMAL_SCALE)[s.variant];
@@ -37,8 +40,8 @@ function wave(age: number, period: number): number {
   return Math.sin((age % period) / period * TAU);
 }
 
-function cycle(s: PoseInput): number {
-  const stride = PROFILES[s.kind].stride * s.bodyScale;
+function cycle(s: PoseInput, visualStrideM = PROFILES[s.kind].stride): number {
+  const stride = visualStrideM * s.bodyScale;
   return (s.gaitDistance % stride) / stride;
 }
 
@@ -89,9 +92,11 @@ function hinge(ay: number, az: number, by: number, bz: number, length: number, s
 function headYaw(s: PoseInput): number {
   const side = s.variant % 2 === 0 ? 1 : -1;
   switch (s.action) {
+    case 'talk': return .035 * wave(s.age, 1.1);
     case 'look': return side * (0.36 + 0.19 * wave(s.age, 2.3));
     case 'avoid': return side * -0.23;
     case 'startle': return side * 0.16;
+    case 'duck': return side * .08;
     default: return 0.045 * wave(s.age, 3.8);
   }
 }
@@ -132,12 +137,14 @@ function human(s: PoseInput, out: Painter): void {
   const moving = pace(s);
   const reachZ = reach(s);
   const legLength = 0.832;
-  let hip = 0.875 - (s.action === 'startle' ? 0.047 : s.action === 'avoid' ? 0.025 : 0)
+  const running = s.action === 'startle' && s.humanGender === 'female' && s.speed > 1.4 * s.bodyScale;
+  const duck = s.action === 'duck', original = out;
+  let hip = 0.875 - (duck ? .075 : s.action === 'startle' ? 0.047 : s.action === 'avoid' ? 0.025 : 0)
     + 0.014 * moving * Math.cos(phase * TAU * 2);
   const feet = SIDES.map((side) => {
     const p = (phase + (side === 1 ? 0.5 : 0)) % 1;
     const travel = reachZ * moving * footZ(p);
-    const lift = 0.082 * moving * footY(p);
+    const lift = (running ? .125 : .082) * moving * footY(p);
     const shoe = moving * shoePitch(p);
     const cs = Math.cos(shoe);
     const sn = Math.sin(shoe);
@@ -148,47 +155,81 @@ function human(s: PoseInput, out: Painter): void {
     hip = Math.min(hip, hipCeiling(0.014, ankleY, ankleZ, legLength) - 0.018);
     return { side, p, travel, soleY, ankleY, ankleZ, shoe };
   });
-  const jacket = CLOTHES[i];
-  const pants = PANTS[i];
+  // Upper-body bend leaves the feet on their independently collision-checked floor.
+  const lean = duck ? -.27 : running ? -.13 : 0;
+  if (lean) {
+    const c = Math.cos(lean), sn = Math.sin(lean);
+    const at = (x: number, y: number, z: number): [number, number, number] => [x, hip + (y - hip) * c - z * sn, (y - hip) * sn + z * c];
+    out = { region: r => original.region?.(r), anchor: (name, x, y, z) => original.anchor?.(name, ...at(x, y, z)),
+      part: (shape, x, y, z, w, h, d, color, pitch = 0, yaw = 0, roll = 0) => original.part(shape, ...at(x, y, z), w, h, d, color, pitch + lean, yaw, roll),
+      link: (ax, ay, az, bx, by, bz, width, depth, color) => original.link(...at(ax, ay, az), ...at(bx, by, bz), width, depth, color) };
+  }
+  const grandmother = s.humanRole === 'grandmother', grandfather = s.humanRole === 'grandfather';
+  const elderly = grandmother || grandfather;
+  const throwAge = s.foodThrowAge ?? Infinity;
+  const throwing = elderly && Number.isFinite(throwAge) && s.action !== 'startle' && s.action !== 'duck';
+  const throwReach = throwing ? Math.sin(Math.min(1, throwAge / 1.2) * Math.PI) : 0;
+  const hanbok = s.humanOutfit === 'hanbok';
+  const skirt = hanbok && (s.humanGender === 'female' || grandmother);
+  const jacket = hanbok ? HANBOK_TOP[i] : grandmother ? 0x896478 : grandfather ? 0x8d8268 : CLOTHES[i];
+  const pants = hanbok ? HANBOK_BOTTOM[i] : PANTS[i];
   const clay = CLAY[i];
-  const cap = CAPS[i];
+  const cap = CAPS[i], character = HUMAN_CHARACTERS[i];
 
   out.region?.('torso');
   out.anchor?.('body', 0, hip, 0.015);
-  out.part('round', 0, hip, 0.015, 0.323, 0.235, 0.225, pants);
+  if (skirt) out.part('taper', 0, hip - .225, .015, .55, 1.01, .42, pants);
+  else out.part('round', 0, hip, 0.015, 0.323, 0.235, 0.225, pants);
   // Broader end of the tapered jacket is at the shoulders.
   const twist = 0.066 * moving * Math.sin(phase * TAU);
-  out.part('taper', 0, hip + 0.245, 0, 0.447, 0.482, 0.251, jacket, 0, twist, Math.PI);
-  out.part('block', -0.107 * Math.sin(twist), hip + 0.276, -0.107 * Math.cos(twist),
+  out.part('taper', 0, hip + (skirt ? .365 : .245), 0, .447, skirt ? .242 : .482, .251, jacket, 0, twist, Math.PI);
+  if (hanbok) {
+    // White crossed collar and the asymmetric goreum tie distinguish jeogori.
+    for (const side of SIDES) out.part('block', side * .042, hip + .448, -.132, .025, .14, .018, 0xfff5df, 0, 0, side * .59);
+    out.part('block', -.042, hip + .372, -.145, .11, .027, .024, pants, 0, 0, -.13);
+    out.part('block', -.05, hip + .295, -.145, .026, .16, .02, pants, 0, 0, -.10);
+  } else out.part('block', -0.107 * Math.sin(twist), hip + 0.276, -0.107 * Math.cos(twist),
     0.058, 0.294, 0.023, cap, 0, twist);
   out.part('taper', 0, hip + 0.516, 0, 0.117, 0.139, 0.114, clay);
   const hy = hip + 0.665;
   const yaw = headYaw(s);
-  const pitch = s.action === 'startle' ? 0.15 : s.action === 'look' ? 0.085 : 0;
+  const pitch = s.action === 'startle' ? 0.15 : s.action === 'look' ? 0.085 : s.action === 'talk' ? .035 * wave(s.age, 1.4) : 0;
   out.region?.('head');
   eyeAnchor(out, hy, -0.014, yaw, pitch, 0.027, -0.081);
   headPart(out, hy, -0.014, yaw, pitch, 'round', 0, 0, 0, 0.176, 0.234, 0.189, clay);
-  mouthPart(out, hy, -0.014, yaw, pitch, 'round', -0.044, -0.016, 0.139, 0.133, 0.156, clay);
-  headPart(out, hy, -0.014, yaw, pitch, 'round', 0, 0.081, 0.005, 0.21, 0.13, 0.204, cap);
-  headPart(out, hy, -0.014, yaw, pitch, 'block', 0, 0.063, -0.071, 0.173, 0.019, 0.109, cap);
+  const screaming = s.action === 'startle' && s.humanGender === 'female';
+  mouthPart(out, hy, -.014, yaw, pitch, 'round', -.044, screaming ? -.093 : -.016, screaming ? .055 : .139, screaming ? .075 : .133, screaming ? .020 : .156, screaming ? 0x39282a : clay);
+  headPart(out, hy, -0.014, yaw, pitch, 'round', 0, grandmother ? .066 : .081, 0.005, grandmother ? .232 : .21, grandmother ? .16 : .13, .204, elderly ? 0xc7c4bc : character.hairColor);
+  // Reuse the existing two head pieces, preserving the fixed instance budget.
+  const tied = !elderly && (hanbok && s.humanGender === 'female' || character.hair === 'tied');
+  headPart(out, hy, -.014, yaw, pitch, 'block', 0, grandmother ? .09 : tied ? .025 : .063, grandmother ? .114 : tied ? .10 : -.071,
+    grandmother ? .09 : tied ? .07 : .173, grandmother ? .085 : tied ? .10 : .019, grandmother ? .085 : tied ? .075 : .109, grandmother ? 0xc7c4bc : grandfather ? 0x625c52 : tied ? character.hairColor : cap);
 
   out.region?.('limbs');
   for (const { side, p, travel, soleY, ankleY, ankleZ, shoe } of feet) {
     const x = side * 0.097;
     const hipY = hip + 0.018;
     const [kneeY, kneeZ] = hinge(hipY, 0.014, ankleY, ankleZ, legLength, 0.51, 1);
-    out.link(x, hipY, 0.014, x, kneeY, kneeZ, 0.144, 0.150, pants);
-    out.link(x, kneeY, kneeZ, x, ankleY, ankleZ, 0.117, 0.113, pants);
-    out.part('block', x, soleY, travel, 0.092, 0.074, 0.181, SOLE, shoe);
+    original.link(x, hipY, 0.014, x, kneeY, kneeZ, hanbok && !skirt ? .19 : .144, hanbok && !skirt ? .18 : .150, pants);
+    original.link(x, kneeY, kneeZ, x, ankleY, ankleZ, 0.117, 0.113, pants);
+    original.part('block', x, soleY, travel, 0.092, 0.074, 0.181, SOLE, shoe);
     const shoulder = side * 0.186;
     const elbow = side * 0.213;
     const wrist = side * 0.214;
-    const raise = s.action === 'startle' ? 0.10 : 0;
+    const raise = running ? .28 : s.action === 'startle' ? 0.10 : s.action === 'talk' ? .04 + .03 * wave(s.age + side, 1.7) : 0;
+    if (throwing && side === 1) {
+      const elbowY = hip + .25 + .16 * throwReach, elbowZ = -.08 - .12 * throwReach;
+      const handY = hip + .13 + .3 * throwReach, handZ = -.1 - .42 * throwReach;
+      out.link(shoulder, hip + .429, .011, elbow, elbowY, elbowZ, hanbok ? .17 : .123, hanbok ? .17 : .125, jacket);
+      out.link(elbow, elbowY, elbowZ, wrist, handY, handZ, hanbok ? .16 : .101, hanbok ? .16 : .099, jacket);
+      out.part('round', wrist, handY, handZ, .073, .118, .076, clay);
+      continue;
+    }
     const swing = -0.113 * moving * footZ(p);
     out.link(shoulder, hip + 0.429, 0.011, elbow, hip + 0.207 + raise * 0.4, 0.022 + swing * 0.48,
-      0.123, 0.125, jacket);
+      hanbok ? .17 : .123, hanbok ? .17 : .125, jacket);
     out.link(elbow, hip + 0.207 + raise * 0.4, 0.022 + swing * 0.48,
-      wrist, hip - 0.018 + raise, swing - 0.014, 0.101, 0.099, jacket);
+      wrist, hip - 0.018 + raise, swing - 0.014, hanbok ? .16 : .101, hanbok ? .16 : .099, jacket);
     out.part('round', wrist, hip - 0.026 + raise, swing - 0.014, 0.073, 0.118, 0.076, clay);
   }
 }
@@ -249,6 +290,40 @@ const RIGS: Readonly<Record<Animal, Quadruped>> = {
   },
 };
 
+type Pet = 'dog' | 'cat';
+// Visual paw cycles must not rewrite the simulation's audible footstep stride.
+const PET_GAIT = {
+  dog: { stride: 0.26, stance: 0.67, hindLead: 0.25, lift: [0.063, 0.058], crest: 0.43, bob: 0.013 },
+  cat: { stride: 0.245, stance: 0.72, hindLead: 0.16, lift: [0.045, 0.048], crest: 0.52, bob: 0.006 },
+} as const;
+
+function smoothUnit(t: number): number {
+  const u = Math.max(0, Math.min(1, t));
+  return u * u * (3 - 2 * u);
+}
+
+function petFoot(s: PoseInput, kind: Pet, phase: number, side: number, hind: boolean) {
+  const gait = PET_GAIT[kind];
+  const profile = PROFILES[kind];
+  const p = (phase + (side === 1 ? 0.5 : 0) + (hind ? gait.hindLead : 0)) % 1;
+  const speed = s.speed / (profile.walkSpeed * s.bodyScale);
+  // Full reach arrives at a low walk speed; a planted paw then cancels
+  // root translation on a straight route, even at ordinary slow speeds.
+  const engaged = smoothUnit(speed / 0.32);
+  const stride = gait.stride / sizeVariant(s);
+  const halfStance = stride * gait.stance / 2;
+  if (p < gait.stance) return { lift: 0, travel: engaged * (stride * p - halfStance) };
+  const t = (p - gait.stance) / (1 - gait.stance);
+  const arc = t <= gait.crest
+    ? smoothUnit(t / gait.crest)
+    : smoothUnit((1 - t) / (1 - gait.crest));
+  const fastLift = 1 + (kind === 'dog' ? 0.35 : 0.20) * smoothUnit((speed - 1) / 1.3);
+  return {
+    lift: engaged * gait.lift[hind ? 1 : 0] * arc * fastLift,
+    travel: engaged * halfStance * (1 - 2 * smoothUnit(t)),
+  };
+}
+
 function animalHead(kind: Animal, s: PoseInput, out: Painter, rig: Quadruped, offset: number): void {
   const [y, z, w, h, d] = rig.skull;
   const hy = y + offset;
@@ -292,27 +367,28 @@ function animalHead(kind: Animal, s: PoseInput, out: Painter, rig: Quadruped, of
 
 function animal(kind: Animal, s: PoseInput, out: Painter): void {
   const rig = RIGS[kind];
-  const phase = cycle(s);
+  const pet = kind === 'rat' ? null : kind;
+  const phase = cycle(s, pet ? PET_GAIT[pet].stride : undefined);
   const moving = pace(s);
   const crouch = s.action === 'startle' ? 0.065 : s.action === 'avoid' ? 0.042 : 0;
   const h = PROFILES[kind].height;
-  let offset = h * (moving * 0.010 * Math.cos(phase * TAU * 2) - crouch);
+  const bob = pet ? PET_GAIT[pet].bob : 0.010;
+  let offset = h * (moving * bob * Math.cos(phase * TAU * 2) - crouch);
   const coat = rig.coat[s.variant];
   const trim = rig.trim[s.variant];
   const [x, fy, fz, hy, hz] = rig.legs;
   const [fw, fh, fd] = rig.foot;
   const reachZ = reach(s);
-  const quick = s.action === 'startle' && s.speed >= 1.4 * PROFILES[kind].walkSpeed * s.bodyScale;
-  const hindPhase = quick && kind !== 'rat' ? 0.5 : rig.hindPhase;
   const feet = SIDES.flatMap((side) => SIDES.map((end) => {
     const hind = end === 1;
-    const p = (phase + (side === 1 ? 0.5 : 0) + (hind ? hindPhase : 0)) % 1;
-    const lift = rig.lift * moving * footY(p);
+    const p = (phase + (side === 1 ? 0.5 : 0) + (hind ? rig.hindPhase : 0)) % 1;
+    const { lift, travel } = pet ? petFoot(s, pet, phase, side, hind)
+      : { lift: rig.lift * moving * footY(p), travel: reachZ * moving * footZ(p) };
     const ay = hind ? hy : fy;
     const az = hind ? hz : fz;
     const bx = side * x;
     const by = fh * 0.78 + lift;
-    const bz = az + reachZ * moving * footZ(p);
+    const bz = az + travel;
     const length = rig.lengths[hind ? 1 : 0];
     offset = Math.min(offset, hipCeiling(az, by, bz, length) - ay);
     return { ay, az, bx, by, bz, lift, length, hind };

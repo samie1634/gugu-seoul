@@ -43,6 +43,8 @@ export interface NativeSweepHit {
   readonly normal: Vec3;
   readonly colliderId: string;
   readonly layerId?: string;
+  /** Unit horizontal escape direction for a solid lip that cannot support the whole sole. */
+  readonly edgeSlide?: Vec3;
 }
 
 /** null is a validated miss. undefined means unavailable, invalid or unverified. */
@@ -51,9 +53,13 @@ export type NativeQueryResult<T> = T | null | undefined;
 export interface NativeWorldQueries {
   /** Query the whole sole disk in [min(previousFeetY, at.y)-maxDropM, previousFeetY+maxRiseM]. */
   supportAt(probe: NativeSupportProbe): NativeQueryResult<NativeSupport>;
+  /** Event-time verification for moving supports during a staged frame. */
+  supportAtTime?(probe: NativeSupportProbe, time: number): NativeQueryResult<NativeSupport>;
   sweepBody(fromCenter: Vec3, toCenter: Vec3, body: NativeBody): NativeQueryResult<NativeSweepHit>;
   /** true is verified clear; false is known overlap; undefined is unverified. */
   sphereClear(center: Vec3, radiusM: number): boolean | undefined;
+  /** A verified camera chord across the staged movement of dynamic obstacles. */
+  sweepCameraMotion?(from: Vec3, to: Vec3, radiusM: number): NativeQueryResult<NativeSweepHit>;
   /** Includes initial penetration (fraction 0); a tangent moving away remains clear. */
   sweepSphere(from: Vec3, to: Vec3, radiusM: number): NativeQueryResult<NativeSweepHit>;
 }

@@ -1,3 +1,5 @@
+import { landmarkCrowdWalks } from './landmark-crowds.ts';
+import { feedingOrigin, feedingGroundAt, clearFeedingPath } from '../../../feeding-ground.ts';
 import type { MapLayout, NavEdge } from '../../map/contracts.ts';
 import { MAP_CONTRACT_VERSION } from '../../map/contracts.ts';
 import { isSpawnClear, sampleGround, sejongRoad } from '../../map/layout.ts';
@@ -8,12 +10,14 @@ import { HARD_MAX_NPCS, NPC_KINDS, scaleProfiles } from '../src/profiles.ts';
 
 export interface MapNpcAdapterOptions {
   readonly bodyScale?: number;
+  readonly feedingWalks?: boolean;
+  readonly landmarkCrowds?: boolean;
   readonly spawnRadius?: number;
   readonly zoneCapacity?: number;
 }
 export interface MapNpcAdapter {
   readonly navigation: NpcNavigation;
-  /** Exact map-owned nominal lane contract, never the old reference 4-lane list. */
+  /** Map-owned road summary; real maps do not invent nominal lane centres. */
   readonly road: Readonly<{ width: number; minX: number; maxX: number; laneCentres: readonly number[] }>;
   readonly excludedEdges: readonly { readonly a: string; readonly b: string; readonly reason: 'traffic' | 'clearance' }[];
 }
@@ -39,7 +43,9 @@ export function createMapNpcAdapter(layout: MapLayout, options: MapNpcAdapterOpt
   const accepted: { route: NpcRoute; edge: NavEdge }[] = [];
   const excludedEdges: { a: string; b: string; reason: 'traffic' | 'clearance' }[] = [];
   const raw = createAabbNavigation({
-    obstacles: layout.colliders, routes, spawnZones: [], bounds: BOUNDS,
+    // Real-map collider AABBs are broad-phase only; polygon clearance is
+    // checked by the map at every terrain sample instead.
+    obstacles: layout.realMap ? [] : layout.colliders, routes, spawnZones: [], bounds: BOUNDS,
     terrainAt(p, context, probe) {
       // Missing feet context at a bridge is ambiguous: fail closed.
       if (context?.referenceY === undefined || !probe) return undefined;
@@ -48,6 +54,8 @@ export function createMapNpcAdapter(layout: MapLayout, options: MapNpcAdapterOpt
       // sampleGround calls asphalt walkable; traffic safety remains a separate
       // policy. No road/crossing is enabled by this adapter.
       if (!sample.walkable || sample.surface === 'water' || sample.surface === 'asphalt') return undefined;
+      if (layout.realMap && !isSpawnClear(layout, { x: p.x, y: sample.y, z: p.z },
+        probe.radius, probe.height)) return undefined;
       return { height: sample.y, walkable: true, surface: sample.surface, layerId: sample.zone };
     },
   });
@@ -85,10 +93,45 @@ export function createMapNpcAdapter(layout: MapLayout, options: MapNpcAdapterOpt
       center: { x: spawn.x, z: spawn.z }, radius: spawnRadius, capacity: zoneCapacity,
       referenceY: spawn.y, layerId: ground.zone });
   }
+  if (options.feedingWalks) {
+    const origin = feedingOrigin(layout);
+    const kinds = ['dog', 'cat', 'rat', 'dog', 'cat', 'rat', 'dog', 'cat', 'rat', 'dog', 'cat', 'rat', 'cat', 'rat', 'rat', 'rat'] as const;
+    const localZones: SpawnZone[] = [];
+    for (let i = 0; i < 16; i++) {
+      const kind = kinds[i], profile = profiles[kind];
+      for (let attempt = 0; attempt < 24; attempt++) {
+        const angle = i * 2.3999632297 + attempt * .21;
+        const radius = 11 + (i % 3) * 2;
+        const x = origin.x + Math.sin(angle) * radius, z = origin.z + Math.cos(angle) * radius;
+        const y = feedingGroundAt(layout, x, z, profile.radius + 1.1, profile.height);
+        const endX = origin.x + Math.sin(angle) * 2.3, endZ = origin.z + Math.cos(angle) * 2.3;
+        const endY = feedingGroundAt(layout, endX, endZ, profile.radius + 1.1, profile.height);
+        if (y === null || endY === null || localZones.some(zone => Math.hypot(zone.center.x - x, zone.center.z - z) < 2) ||
+            !clearFeedingPath(layout, { x, y, z }, { x: endX, y: endY, z: endZ }, profile.radius + 1.1, profile.height)) continue;
+        const route: NpcRoute = { id: `feeding-walk:${kind}:${i}`, kinds: [kind], loop: false,
+          points: [{ x, y, z }, { x: endX, y: endY, z: endZ }] };
+        const edge: NavEdge = { a: route.id + ':start', b: route.id + ':food', width: profile.radius * 2 + 2.2, kind: 'walk', requiresTrafficCheck: false };
+        routes.push(route); accepted.push({ route, edge });
+        localZones.push({ id: `feeding-spawn:${kind}:${i}`, routeId: route.id, kinds: [kind],
+          center: { x, z }, radius: 1.4, capacity: 1, referenceY: y, minObserverDistance: 3, priorityDistance: 32 });
+        break;
+      }
+    }
+    // Nearby animals use the starting food walks. Keep the existing map routes
+    // available when the player flies elsewhere rather than emptying the city.
+    spawnZones.push(...localZones);
+  }
+  if (options.landmarkCrowds) for (const { route, zone, width } of landmarkCrowdWalks(layout, raw, profiles.human)) {
+    routes.push(route); spawnZones.push(zone);
+    accepted.push({ route, edge: { a: route.id + ':a', b: route.id + ':b', width, kind: 'walk', requiresTrafficCheck: false } });
+  }
   const navigation: NpcNavigation = {
     routes, spawnZones,
     groundAt(p, probe, context) {
-      // Keep local detours inside a validated nontraffic graph corridor.
+      // Escape/return can leave the authored walking strip, but still uses the
+      // same full-footprint dry-ground, traffic, building and map-bound checks.
+      if (context?.escape && probe.kind === 'human') return raw.groundAt(p, probe, context);
+      // Ordinary walking remains inside a validated nontraffic graph corridor.
       const inCorridor = accepted.some(({ route, edge }) => route.kinds.includes(probe.kind)
         && projection(p, route.points[0], route.points[1]).distance <= edge.width / 2 - probe.radius);
       return inCorridor ? raw.groundAt(p, probe, context) : undefined;
@@ -98,7 +141,7 @@ export function createMapNpcAdapter(layout: MapLayout, options: MapNpcAdapterOpt
       let referenceY = from.y; let layerId = context?.layerId;
       for (let i = 0; i <= slices; i += 1) {
         const p = { x: from.x + (to.x - from.x) * i / slices, z: from.z + (to.z - from.z) * i / slices };
-        const ground = navigation.groundAt(p, probe, { referenceY, layerId });
+        const ground = navigation.groundAt(p, probe, { referenceY, layerId, escape: context?.escape });
         if (!ground) return false;
         referenceY = ground.height; layerId = ground.layerId;
       }

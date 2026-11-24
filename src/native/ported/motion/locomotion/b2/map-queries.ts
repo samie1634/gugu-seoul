@@ -1,3 +1,4 @@
+import { createRealMapQueries } from './real-map-queries.ts';
 import type { MapCollider, MapLayout, RoofSpec, WaterContact } from '../../../map/contracts.ts';
 import {
   contains, queryRoofSupport, RIVER, RIVER_ENTRIES, roofHeight, roofNormal,
@@ -236,6 +237,7 @@ function selectSupport(current: NativeSupport | null, candidate: NativeSupport, 
 }
 
 export function createMapQueries(layout: Readonly<MapLayout>): MapNativeQueries {
+  if (layout.realMap) return createRealMapQueries(layout);
   if (!Number.isFinite(layout.promenadeY) || !Number.isFinite(layout.water.bedY) ||
       !Number.isFinite(layout.water.y)) throw new RangeError('Invalid map terrain heights');
 
