@@ -26,7 +26,8 @@ concurrency:
 
 jobs:
   build:
-    if: github.repository == 'samie1634/gugu-seoul'
+    if: github.repository == 'samie1634/gugu-seoul' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/release/build6-pages-review') && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    environment: gugu-pages-draft-intake
     runs-on: ubuntu-latest
     steps:
       - name: Check out the approved version
@@ -46,10 +47,11 @@ jobs:
       - name: Retrieve the pinned pre-reviewed game ZIP from the private draft only
         env:
           RELEASE_ID: ${{ inputs.draft_release_id }}
-          DRAFT_TOKEN: ${{ github.token }}
+          DRAFT_TOKEN: ${{ secrets.GUGU_DRAFT_READ_TOKEN }}
         shell: bash
         run: |
           set -euo pipefail
+          [[ -n "${DRAFT_TOKEN:-}" ]] || { echo "::error::The protected draft-intake secret is not configured."; exit 1; }
           endpoint="https://api.github.com/repos/samie1634/gugu-seoul/releases"
           name=$(jq -er '.artifact.name' release/build6-manifest.json)
           hash=$(jq -er '.artifact.sha256' release/build6-manifest.json)
@@ -61,7 +63,7 @@ jobs:
                 [.[] | select(.draft == true and .published_at == null and any(.assets[]?;
                   .name == $name and .state == "uploaded" and .size == $bytes and .digest == $hash))] |
                 select(length == 1) | .[0].id') || {
-                  echo "::error::The read-only Actions token cannot see exactly one matching private draft."
+                  echo "::error::The protected draft credential cannot see exactly one matching private draft."
                   exit 1
                 }
           fi
@@ -87,7 +89,7 @@ jobs:
       - name: Verify the fresh build byte for byte against the accepted game
         run: python3 tools/verify-pages-release.py dist dist
       - name: Require a passing non-deploying review of this exact commit
-        if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || inputs.publish)
+        if: github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' && inputs.publish
         env:
           PREFLIGHT_TOKEN: ${{ github.token }}
         shell: bash
@@ -102,13 +104,13 @@ jobs:
                 .path == ".github/workflows/pages.yml" and .event == "push" and
                 .status == "completed" and .conclusion == "success")' > /dev/null
       - name: Upload verified Pages artifact
-        if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || inputs.publish)
+        if: github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' && inputs.publish
         uses: actions/upload-pages-artifact@v3
         with:
           path: dist
 
   deploy:
-    if: github.repository == 'samie1634/gugu-seoul' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || inputs.publish)
+    if: github.repository == 'samie1634/gugu-seoul' && github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' && inputs.publish
     needs: build
     runs-on: ubuntu-latest
     permissions:
