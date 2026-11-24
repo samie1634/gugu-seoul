@@ -2,8 +2,16 @@ name: Deploy Gugu Seoul to GitHub Pages
 
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
+    inputs:
+      draft_release_id:
+        description: Numeric ID of the same-repository private draft holding the verified runtime ZIP
+        required: true
+        type: string
+      publish:
+        description: Publish verified output from main to the existing Pages environment
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -14,20 +22,46 @@ concurrency:
 
 jobs:
   build:
+    if: github.repository == 'samie1634/gugu-seoul'
     runs-on: ubuntu-latest
     steps:
       - name: Check out the approved version
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '24'
+          node-version: '24.22.3'
       - name: Install pnpm
         run: npm install --global pnpm@11.25.0
       - name: Install locked dependencies
         run: pnpm install --frozen-lockfile
-      - name: Verify public files
+      - name: Verify public source files without binary exceptions
         run: pnpm audit:public
+      - name: Retrieve the pinned pre-reviewed game ZIP from the private draft only
+        env:
+          RELEASE_ID: ${{ inputs.draft_release_id }}
+          DRAFT_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_ID" =~ ^[1-9][0-9]{0,18}$ ]]
+          endpoint="https://api.github.com/repos/samie1634/gugu-seoul/releases"
+          name=$(jq -er '.artifact.name' release/build6-manifest.json)
+          hash=$(jq -er '.artifact.sha256' release/build6-manifest.json)
+          bytes=$(jq -er '.artifact.bytes' release/build6-manifest.json)
+          get=(curl -fsS --proto '=https' --max-time 90 -H "Authorization: Bearer $DRAFT_TOKEN" -H 'X-GitHub-Api-Version: 2022-11-28')
+          asset=$("${get[@]}" -H 'Accept: application/vnd.github+json' "$endpoint/$RELEASE_ID" |
+            jq -er --arg name "$name" --arg hash "sha256:$hash" --argjson bytes "$bytes" '
+              select(.draft == true and .published_at == null) |
+              [.assets[] | select(.name == $name and .state == "uploaded" and .size == $bytes and (.digest == null or .digest == $hash))] |
+              select(length == 1) | .[0].id')
+          [[ "$asset" =~ ^[1-9][0-9]{0,18}$ ]]
+          "${get[@]}" --location --max-filesize "$bytes" --proto-redir '=https' -H 'Accept: application/octet-stream' \
+            "$endpoint/assets/$asset" --output "$RUNNER_TEMP/gugu-runtime.zip"
+      - name: Verify archive, rights scope and binary paths and hydrate only runtime inputs
+        run: python3 tools/verify-pages-release.py hydrate "$RUNNER_TEMP/gugu-runtime.zip"
       - name: Type check
         run: pnpm typecheck
       - name: Lint
@@ -36,12 +70,16 @@ jobs:
         run: pnpm test
       - name: Build
         run: pnpm build
-      - name: Upload Pages artifact
+      - name: Verify the fresh build byte for byte against the accepted game
+        run: python3 tools/verify-pages-release.py dist dist
+      - name: Upload verified Pages artifact
+        if: inputs.publish && github.ref == 'refs/heads/main'
         uses: actions/upload-pages-artifact@v3
         with:
           path: dist
 
   deploy:
+    if: inputs.publish && github.repository == 'samie1634/gugu-seoul' && github.ref == 'refs/heads/main'
     needs: build
     runs-on: ubuntu-latest
     permissions:
