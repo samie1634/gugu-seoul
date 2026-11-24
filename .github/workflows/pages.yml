@@ -40,11 +40,11 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: Verify public source files without binary exceptions
         run: pnpm audit:public
-      - name: Retrieve the exact authorized release asset by ID
+      - name: Verify the operator-approved private intake repository
         env:
-          ASSET_ID: ${{ secrets.GUGU_DRAFT_ASSET_ID }}
-          DRAFT_TOKEN: ${{ secrets.GUGU_DRAFT_READ_TOKEN }}
-        shell: bash
+          INTAKE_PHASE: verify-private
+          INTAKE_COMMIT: ${{ secrets.GUGU_PRIVATE_INTAKE_COMMIT }}
+          INTAKE_TOKEN: ${{ secrets.GUGU_PRIVATE_INTAKE_READ_TOKEN }}
         run: |
           python3 - <<'PYCODE'
           import hashlib
@@ -52,80 +52,179 @@ jobs:
           import os
           from pathlib import Path
           import re
+          import subprocess
           from urllib.error import HTTPError
-          from urllib.parse import urlsplit
           from urllib.request import HTTPRedirectHandler, Request, build_opener
 
-          EXPECTED = {
-              "name": "GuguSeoul-Build6-Pages-Runtime-Only.zip",
-              "bytes": 38316416,
-              "sha256": "31d6933950dd4b01e9cc9e7b49846a89d9361078b0a94a02300e5355b4a50849",
-          }
-          RELEASE_STORAGE = "release-assets.githubusercontent.com"
-          GITHUB_API = "https://api.github.com/repos/samie1634/gugu-seoul/releases/assets/"
+          REPO = "samie1634/gugu-pages-intake"
+          BASENAME = "GuguSeoul-Build6-Pages-Runtime-Only.zip"
+          PARTS = (
+              (BASENAME + ".part1", 19200000, "643e8962089dccfc06d2317fb06a6aaaa318625d8b58e12ab76604b170f2ad7b", "97315559953b69c544ac91afb2bfaf2943b40809"),
+              (BASENAME + ".part2", 19116416, "7d48224327a33e92bc96df42c4f93817a3d8222f58f386aedea5569be1add949", "0d9813c221a18fb2827b50803a366b602d8416ca"),
+          )
+          EXPECTED = {"name":BASENAME,"bytes":38316416,"sha256":"31d6933950dd4b01e9cc9e7b49846a89d9361078b0a94a02300e5355b4a50849"}
 
           class IntakeError(Exception):
-              """Messages are deliberately safe to print; no request URL, token, or server body."""
+              pass
 
           class NoRedirect(HTTPRedirectHandler):
               def redirect_request(self, request, fp, code, message, headers, newurl):
                   return None
 
-          def receive(open_request, asset_id, token, expected):
-              if not re.fullmatch(r"[1-9][0-9]{0,18}", asset_id):
-                  raise IntakeError("The protected release asset ID is missing or malformed.")
-              if not token or any(c.isspace() for c in token):
-                  raise IntakeError("The protected draft-read credential is missing or malformed.")
-              asset = Request(GITHUB_API + asset_id, headers={
-                  "Authorization": "Bearer " + token,
-                  "Accept": "application/octet-stream",
-                  "X-GitHub-Api-Version": "2022-11-28",
-              })
+          def check(condition, message):
+              if not condition: raise IntakeError(message)
+
+          def require_pin(commit):
+              check(re.fullmatch("[a-f0-9]{40}", commit) and commit != "0"*40, "Protected private intake commit is missing or malformed.")
+
+          def verify_private(open_request, commit, token):
+              require_pin(commit)
+              check(bool(token) and not any(c.isspace() for c in token), "Protected private intake token is missing or malformed.")
+              req = Request("https://api.github.com/repos/"+REPO, headers={"Authorization":"Bearer "+token, "Accept":"application/vnd.github+json"})
               try:
-                  response = open_request(asset, timeout=90)
-              except HTTPError as first:
-                  if first.code != 302:
-                      raise IntakeError(f"GitHub Get release asset returned HTTP {first.code}; stopping.") from None
-                  target = first.headers.get("Location", "")
-                  first.close()
-                  dest = urlsplit(target)
-                  if not target or any(ord(c) <= 32 or ord(c) == 127 for c in target) or (
-                      dest.scheme != "https" or dest.netloc != RELEASE_STORAGE or not dest.path or dest.fragment
-                  ):
-                      raise IntakeError("GitHub returned an unapproved release asset redirect; stopping.") from None
-                  # This new request deliberately lacks Authorization, cookies and other API credentials.
-                  try:
-                      response = open_request(Request(target, headers={"Accept": "application/octet-stream"}), timeout=90)
-                  except HTTPError as second:
-                      raise IntakeError(f"GitHub release asset storage returned HTTP {second.code}; stopping.") from None
-              with response:
-                  if response.status != 200:
-                      raise IntakeError(f"GitHub release asset returned HTTP {response.status}; stopping.")
-                  if response.headers.get("Content-Type", "").split(";")[0].strip().lower() == "application/json":
-                      raise IntakeError("Expected binary ZIP; GitHub returned JSON metadata instead.")
-                  raw = response.read(expected["bytes"] + 1)
-              if len(raw) != expected["bytes"] or hashlib.sha256(raw).hexdigest() != expected["sha256"]:
-                  raise IntakeError("Release asset size or SHA-256 does not match the approved runtime ZIP.")
-              return raw
+                  with open_request(req, timeout=45) as response:
+                      check(response.status == 200, "GitHub did not return private intake repository metadata.")
+                      meta = json.loads(response.read(128*1024))
+              except HTTPError as exc:
+                  raise IntakeError(f"GitHub private intake metadata was refused (HTTP {exc.code}).") from None
+              check(meta.get("full_name")==REPO and meta.get("private") is True and meta.get("visibility")=="private",
+                    "Intake repository is missing, has the wrong owner, or is not private.")
+
+          def read_git(repo, *args):
+              return subprocess.run(["git","-C",str(repo),*args],stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,check=True).stdout
+
+          def materialize(repo, commit, target):
+              require_pin(commit)
+              check(read_git(repo,"rev-parse","--verify","HEAD").decode("ascii").strip()==commit,"Checkout does not match the pinned private commit.")
+              expected_tree = {f"100644 blob {blob}\t{name}" for name, _, _, blob in PARTS}
+              actual_tree = read_git(repo,"ls-tree","-r","-z","HEAD").decode("ascii").rstrip("\0").split("\0")
+              check(len(actual_tree)==2 and set(actual_tree)==expected_tree,"Intake commit must contain only the two reviewed regular-file blobs.")
+              data=[]
+              for name,size,digest,blob in PARTS:
+                  part=repo/name
+                  check(not part.is_symlink() and part.is_file() and part.stat().st_size==size,"Intake file size/type mismatch.")
+                  raw=part.read_bytes()
+                  actual_blob=hashlib.sha1(b"blob "+str(len(raw)).encode()+b"\0"+raw).hexdigest()
+                  check(hashlib.sha256(raw).hexdigest()==digest and actual_blob==blob,"Unsafe or changed intake slice; refusing.")
+                  data.append(raw)
+              joined=b"".join(data)
+              check(len(joined)==EXPECTED["bytes"] and hashlib.sha256(joined).hexdigest()==EXPECTED["sha256"],"Joining slices did not reproduce the approved ZIP.")
+              with target.open("xb") as file:file.write(joined)
 
           def entry():
               try:
-                  manifest = json.loads(Path("release/build6-manifest.json").read_text())
-                  if manifest.get("artifact") != EXPECTED:
-                      raise IntakeError("Runtime release manifest changed; stopping.")
-                  connection = build_opener(NoRedirect())
-                  raw = receive(connection.open, os.environ.get("ASSET_ID", ""), os.environ.get("DRAFT_TOKEN", ""), EXPECTED)
-                  with (Path(os.environ["RUNNER_TEMP"]) / "gugu-runtime.zip").open("xb") as file:
-                      file.write(raw)
-                  print("Exact approved runtime ZIP size and SHA-256 verified.")
+                  pinned=os.environ.get("INTAKE_COMMIT","")
+                  if os.environ.get("INTAKE_PHASE")=="verify-private":
+                      verify_private(build_opener(NoRedirect()).open,pinned,os.environ.get("INTAKE_TOKEN",""))
+                      print("Verified the approved intake repository is private.")
+                  else:
+                      check(json.loads(Path("release/build6-manifest.json").read_text()).get("artifact")==EXPECTED,"Reviewed game manifest changed.")
+                      materialize(Path(".cache/private-package-intake"),pinned,Path(os.environ["RUNNER_TEMP"])/"gugu-runtime.zip")
+                      print("Verified pinned Git blobs and exact original runtime ZIP.")
               except IntakeError as exc:
                   raise SystemExit(str(exc)) from None
               except Exception:
-                  # Do not print urllib exceptions or tracebacks: they can contain signed storage URLs.
-                  raise SystemExit("The protected GitHub asset intake could not complete safely.") from None
+                  raise SystemExit("Protected private GitHub intake could not complete safely.") from None
 
-          if __name__ == "__main__":
-              entry()
+          if __name__ == "__main__": entry()
+          PYCODE
+      - name: Check out the pinned intake commit with only repository-specific read access
+        uses: actions/checkout@v4
+        with:
+          repository: samie1634/gugu-pages-intake
+          ref: ${{ secrets.GUGU_PRIVATE_INTAKE_COMMIT }}
+          token: ${{ secrets.GUGU_PRIVATE_INTAKE_READ_TOKEN }}
+          path: .cache/private-package-intake
+          fetch-depth: 1
+          persist-credentials: false
+          lfs: false
+          submodules: false
+      - name: Verify the two slices and reconstruct the exact approved ZIP
+        env:
+          INTAKE_PHASE: assemble
+          INTAKE_COMMIT: ${{ secrets.GUGU_PRIVATE_INTAKE_COMMIT }}
+        run: |
+          python3 - <<'PYCODE'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          import re
+          import subprocess
+          from urllib.error import HTTPError
+          from urllib.request import HTTPRedirectHandler, Request, build_opener
+
+          REPO = "samie1634/gugu-pages-intake"
+          BASENAME = "GuguSeoul-Build6-Pages-Runtime-Only.zip"
+          PARTS = (
+              (BASENAME + ".part1", 19200000, "643e8962089dccfc06d2317fb06a6aaaa318625d8b58e12ab76604b170f2ad7b", "97315559953b69c544ac91afb2bfaf2943b40809"),
+              (BASENAME + ".part2", 19116416, "7d48224327a33e92bc96df42c4f93817a3d8222f58f386aedea5569be1add949", "0d9813c221a18fb2827b50803a366b602d8416ca"),
+          )
+          EXPECTED = {"name":BASENAME,"bytes":38316416,"sha256":"31d6933950dd4b01e9cc9e7b49846a89d9361078b0a94a02300e5355b4a50849"}
+
+          class IntakeError(Exception):
+              pass
+
+          class NoRedirect(HTTPRedirectHandler):
+              def redirect_request(self, request, fp, code, message, headers, newurl):
+                  return None
+
+          def check(condition, message):
+              if not condition: raise IntakeError(message)
+
+          def require_pin(commit):
+              check(re.fullmatch("[a-f0-9]{40}", commit) and commit != "0"*40, "Protected private intake commit is missing or malformed.")
+
+          def verify_private(open_request, commit, token):
+              require_pin(commit)
+              check(bool(token) and not any(c.isspace() for c in token), "Protected private intake token is missing or malformed.")
+              req = Request("https://api.github.com/repos/"+REPO, headers={"Authorization":"Bearer "+token, "Accept":"application/vnd.github+json"})
+              try:
+                  with open_request(req, timeout=45) as response:
+                      check(response.status == 200, "GitHub did not return private intake repository metadata.")
+                      meta = json.loads(response.read(128*1024))
+              except HTTPError as exc:
+                  raise IntakeError(f"GitHub private intake metadata was refused (HTTP {exc.code}).") from None
+              check(meta.get("full_name")==REPO and meta.get("private") is True and meta.get("visibility")=="private",
+                    "Intake repository is missing, has the wrong owner, or is not private.")
+
+          def read_git(repo, *args):
+              return subprocess.run(["git","-C",str(repo),*args],stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,check=True).stdout
+
+          def materialize(repo, commit, target):
+              require_pin(commit)
+              check(read_git(repo,"rev-parse","--verify","HEAD").decode("ascii").strip()==commit,"Checkout does not match the pinned private commit.")
+              expected_tree = {f"100644 blob {blob}\t{name}" for name, _, _, blob in PARTS}
+              actual_tree = read_git(repo,"ls-tree","-r","-z","HEAD").decode("ascii").rstrip("\0").split("\0")
+              check(len(actual_tree)==2 and set(actual_tree)==expected_tree,"Intake commit must contain only the two reviewed regular-file blobs.")
+              data=[]
+              for name,size,digest,blob in PARTS:
+                  part=repo/name
+                  check(not part.is_symlink() and part.is_file() and part.stat().st_size==size,"Intake file size/type mismatch.")
+                  raw=part.read_bytes()
+                  actual_blob=hashlib.sha1(b"blob "+str(len(raw)).encode()+b"\0"+raw).hexdigest()
+                  check(hashlib.sha256(raw).hexdigest()==digest and actual_blob==blob,"Unsafe or changed intake slice; refusing.")
+                  data.append(raw)
+              joined=b"".join(data)
+              check(len(joined)==EXPECTED["bytes"] and hashlib.sha256(joined).hexdigest()==EXPECTED["sha256"],"Joining slices did not reproduce the approved ZIP.")
+              with target.open("xb") as file:file.write(joined)
+
+          def entry():
+              try:
+                  pinned=os.environ.get("INTAKE_COMMIT","")
+                  if os.environ.get("INTAKE_PHASE")=="verify-private":
+                      verify_private(build_opener(NoRedirect()).open,pinned,os.environ.get("INTAKE_TOKEN",""))
+                      print("Verified the approved intake repository is private.")
+                  else:
+                      check(json.loads(Path("release/build6-manifest.json").read_text()).get("artifact")==EXPECTED,"Reviewed game manifest changed.")
+                      materialize(Path(".cache/private-package-intake"),pinned,Path(os.environ["RUNNER_TEMP"])/"gugu-runtime.zip")
+                      print("Verified pinned Git blobs and exact original runtime ZIP.")
+              except IntakeError as exc:
+                  raise SystemExit(str(exc)) from None
+              except Exception:
+                  raise SystemExit("Protected private GitHub intake could not complete safely.") from None
+
+          if __name__ == "__main__": entry()
           PYCODE
       - name: Verify archive, rights scope and binary paths and hydrate only runtime inputs
         run: python3 tools/verify-pages-release.py hydrate "$RUNNER_TEMP/gugu-runtime.zip"
