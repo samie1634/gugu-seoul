@@ -1,0 +1,29 @@
+{
+  "baseManifestSha256": "ee9d089e4708e9ddb74aca99ab84f380b7ef7eaba5cc93560142bb6b7535ce74",
+  "source": {
+    "kind": "owner-approved-ai-crop",
+    "sha256": "411b6fb841e2198157b5ba789d5585109ad6c01800afe871c525058ee49f18e2",
+    "pixels": [
+      670,
+      670
+    ]
+  },
+  "files": {
+    "index.html": {
+      "sha256": "2136e8704987d2df16b448ee592bb3d6b5d985d64a9b5794f8ed37175a3a8721",
+      "bytes": 11002
+    },
+    "icons/gugu-seoul-favicon-411b6fb841e2.ico": {
+      "sha256": "58965289ad94d6a56ba178f3e85870d4542fbf7fe7ccca4ddd1a9a22555e4ff0",
+      "bytes": 5184
+    },
+    "icons/gugu-seoul-favicon-411b6fb841e2-32.png": {
+      "sha256": "f05945c809397f46d66cbb638f5b869d4db2f18fe1bb6b76c57f4e8371c857a2",
+      "bytes": 1543
+    },
+    "icons/gugu-seoul-apple-touch-411b6fb841e2.png": {
+      "sha256": "fc3b91b4474adfc531ef9a76415713b6fd5ef63966cb295797a66314488111d5",
+      "bytes": 38965
+    }
+  }
+}

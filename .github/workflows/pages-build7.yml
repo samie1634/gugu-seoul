@@ -6,6 +6,13 @@ on:
     paths:
       - '.github/workflows/pages-build7.yml'
       - 'release/build7-manifest.json'
+      - 'release/build7-icon-output.json'
+      - 'release/build7-icon-assets/**'
+      - 'public/icons/**'
+      - 'tools/build7-favicon.mjs'
+      - 'tools/verify-build7-icon-output.py'
+      - 'index.html'
+      - 'vite.config.mjs'
       - 'tools/prepare-pages-build7-intake.py'
       - 'tools/verify-pages-release.py'
   workflow_dispatch:
@@ -74,8 +81,8 @@ jobs:
         run: pnpm test
       - name: Build
         run: pnpm build
-      - name: Verify the fresh build byte for byte against the accepted game
-        run: python3 tools/verify-pages-release.py --manifest build7 dist dist
+      - name: Verify the exact Build 7 output including only the approved favicon overlay
+        run: python3 tools/verify-build7-icon-output.py dist
       - name: Require a passing non-deploying review of this exact commit
         if: github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' && inputs.publish
         env:
