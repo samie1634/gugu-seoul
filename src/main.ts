@@ -18,6 +18,7 @@ import { transactNativeFrame } from './native/frame-transaction.ts';
 import { nativeNear } from './native/body-profile.ts';
 import { selectNativeLegacyLook } from './native/legacy-selection.ts';
 import { useIntegratedScene } from './entry-mode.ts';
+import { retryFailedLocalVisual, showProceduralLocalPlayer } from './player-render-policy.ts';
 import { updateCharacterBubble } from './speech-bubble.ts';
 import { foodBoostDisplay } from './native/flight-feeding.ts';
 import { createDayCycle } from './day-cycle.ts';
@@ -42,8 +43,7 @@ function boot(): void {
   const coarse = matchMedia('(pointer: coarse)').matches;
   const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
   const params = new URLSearchParams(location.search);
-  // The integrated scene is the normal experience. Keep an explicit legacy
-  // route for comparison and recovery without changing saved progress.
+  // Old bookmarked selectors stay in the integrated scene, not the retired player renderer.
   const nativeEnabled = useIntegratedScene(params);
   const preset = params.get('native-preset') ?? 'plaza';
   if (nativeEnabled && !NATIVE_PRESETS.includes(preset as NativePreset)) throw new Error('Unknown native QA preset');
@@ -84,8 +84,9 @@ function boot(): void {
   document.addEventListener('visibilitychange', () => { if (document.hidden) pauseMultiplayer(); });
   window.addEventListener('pagehide', pauseMultiplayer);
   let bird = native?.state ?? createBirdState();
-  const groundPigeon = native ? createGroundPigeon(scene, import.meta.env.BASE_URL) : null;
-  const flightPigeon = native ? createFlightPigeon(scene, import.meta.env.BASE_URL) : null;
+  let groundPigeon = native ? createGroundPigeon(scene, import.meta.env.BASE_URL) : null;
+  let flightPigeon = native ? createFlightPigeon(scene, import.meta.env.BASE_URL) : null;
+  if (native?.look === 'pigeon') native.root.visible = false;
   let committedDescent = false;
   let takeoffIntent: PigeonTakeoffIntent | null = null;
   let previousGroundSteps = bird.steps, lastGroundLanding = -Infinity;
@@ -239,6 +240,8 @@ function boot(): void {
   element('home-button').addEventListener('click', () => {
     if (native) { if (!native.home()) return; bird = native.state; }
     else bird = createBirdState();
+    if (groundPigeon) groundPigeon = retryFailedLocalVisual(groundPigeon, () => createGroundPigeon(scene, import.meta.env.BASE_URL));
+    if (flightPigeon) flightPigeon = retryFailedLocalVisual(flightPigeon, () => createFlightPigeon(scene, import.meta.env.BASE_URL));
     groundPigeon?.reset(); previousGroundSteps = bird.steps; lastGroundLanding = -Infinity;
     firstPerson = false; committedGroundFirstPerson = false; committedDescent = false; peckAge = 10; takeoffIntent = null;
     cameraOrbit.reset();
@@ -414,7 +417,7 @@ function boot(): void {
       }
       cooAge += dt;
       if (bird.mode === 'walk') walkedSinceCoo += dt;
-      if (walkedSinceCoo > 5.5) coo();
+      if (walkedSinceCoo > 5.5 && bird.grounded && bird.mode === 'rest' && !groundPigeon?.floorBusy) coo();
       audio.setFlight(!bird.grounded);
       if (timestamp - savedAt > 2000) { persist(); savedAt = timestamp; }
     } else if (!playing || native) audio.setFlight(false);
@@ -436,9 +439,13 @@ function boot(): void {
       });
       flightVisual = flightPigeon?.update(native.state, native.root, {
         started, firstPerson: committedGroundFirstPerson, look: native.look, reducedMotion, descend: committedDescent,
+        landingSeconds: bird.grounded && groundVisual ? native.state.time - lastGroundLanding : Infinity,
         preload: groundPigeon.ready || groundPigeon.snapshot().loadState === 'fallback', committedSeconds: activeStep ? dt : 0,
       }) ?? false;
-      native.root.visible = !committedGroundFirstPerson && !groundVisual && !flightVisual;
+      // Land with one approved player visible at a time. Floating remains GroundRest.
+      groundVisual = groundVisual && !flightVisual;
+      groundPigeon.root.visible = groundVisual;
+      native.root.visible = showProceduralLocalPlayer(native.look, committedGroundFirstPerson, groundVisual, flightVisual);
     }
     if (!native && rig) {
       rig.root.position.set(bird.x, bird.y + (bird.mode === 'walk' && !reducedMotion ? Math.sin(bird.steps * 8) * 0.035 : 0), bird.z);

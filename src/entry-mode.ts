@@ -1,4 +1,5 @@
-/** Use the integrated scene by default, retaining an explicit recovery route. */
+/** Old bookmark parameters must not restore the retired local-player renderer. */
 export function useIntegratedScene(params: URLSearchParams): boolean {
-  return params.get('native') !== 'legacy';
+  void params;
+  return true;
 }

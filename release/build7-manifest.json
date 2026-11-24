@@ -1,0 +1,232 @@
+{
+  "artifact": {
+    "name": "GuguSeoul-Build7-Pages-Runtime-Only.zip",
+    "sha256": "f729c34d01f23d7b2d2d0e311c411cf9be0f9f7e975de306f37727baafe4531d",
+    "bytes": 38317706
+  },
+  "sourceBase": "f20a0e708e34d3bfa390cba605f9d10e5afd12e5",
+  "localReviewedGameTree": "b8f99658134f12384191ffa421c1b9b6ce238c04",
+  "destination": "https://samie1634.github.io/gugu-seoul/",
+  "review": "Owner confirmed public game deployment rights for original models and audio. Ship as integrated gameplay assets only; never commit the original binary files or publish the intake ZIP as a standalone release.",
+  "rollbackCommit": "f20a0e708e34d3bfa390cba605f9d10e5afd12e5",
+  "excludedArchiveBackups": [
+    "species-audio/assets/owner-originals-v1/wing-track-02.wav",
+    "species-audio/assets/owner-originals-v1/wing-track-03.wav",
+    "species-audio/assets/owner-originals-v1/wing-track-04.wav",
+    "species-audio/assets/owner-originals-v1/wing-track-05.wav",
+    "species-audio/assets/owner-originals-v1/wing-track-06.wav"
+  ],
+  "files": {
+    "LICENSE.txt": {
+      "sha256": "b27ddd997f1a9e6ceef74db072c6de4be0bf813ab8eae670a8bb11041fc83a37",
+      "bytes": 1066
+    },
+    "THIRD_PARTY_NOTICES.txt": {
+      "sha256": "399c8fa18c2dcf75aff2260b02420322d901baf3290a3eb1e01d178d8d46c84f",
+      "bytes": 4121
+    },
+    "assets/GLTFLoader-Ce0VQthR.js": {
+      "sha256": "0104183309ed2402d8717266beaf8f7b657643182bce65c1293148e949a00ece",
+      "bytes": 45467
+    },
+    "assets/HDRLoader-CYdM_-pC.js": {
+      "sha256": "12cc04f9b36876ebbc8a1a5695e506fe18d84f88cc4ccba62809725767b7587f",
+      "bytes": 3280
+    },
+    "assets/index-CSARRD_P.css": {
+      "sha256": "ab1c0baa4ad4faa4beb54807573fe8aa3687bd9e45928f9c2ea6ceb0ca0e017d",
+      "bytes": 15806
+    },
+    "assets/index-CVqDYpk7.js": {
+      "sha256": "80808f860a415447265254c457a8a610446103cc247e7292b638b7b0c40eab4c",
+      "bytes": 3064811
+    },
+    "assets/sky/sky-1k.hdr": {
+      "sha256": "fd94c84997b8a3c353b62c2125a9b44e19509956986a126e472684432a02d798",
+      "bytes": 1435119,
+      "input": "public/assets/sky/sky-1k.hdr",
+      "rightsMode": "cc0",
+      "provenance": "Unmodified Poly Haven HDRI carried over from the existing approved Sojang scene",
+      "license": "https://polyhaven.com/license"
+    },
+    "assets/sky/sky-2k.hdr": {
+      "sha256": "5244534e9cf5b606f2ff513aa00ddb161b0a4826ffd88a0d3bd03ac29247d198",
+      "bytes": 5451493,
+      "input": "public/assets/sky/sky-2k.hdr",
+      "rightsMode": "cc0",
+      "provenance": "Unmodified Poly Haven HDRI carried over from the existing approved Sojang scene",
+      "license": "https://polyhaven.com/license"
+    },
+    "data/seoul-building-visuals.json": {
+      "sha256": "c13463c6e8a87b937c193edccbf1faba7721b2eb9de3ce64c5cb6b2239e8c994",
+      "bytes": 351161
+    },
+    "data/seoul-osm.json": {
+      "sha256": "6834ed4c9361c72a97f06386378bb1abe17dde7d9314137b3972dae9bfc69697",
+      "bytes": 2298421
+    },
+    "data/seoul-surface-partition.json": {
+      "sha256": "18f42281af714ee4c0b030a5b211db4f5fb0820bbc4de68222eb70cad82f9c75",
+      "bytes": 515877
+    },
+    "data/seoul-trees.json": {
+      "sha256": "95f3138b93860734ade6f6fa59427515a5820d424d32d208b18f6988789038f3",
+      "bytes": 7891
+    },
+    "index.html": {
+      "sha256": "0b00ffcb46ef33a64e367516162cb370d27a42574d823bd9f4402f3b52cda66d",
+      "bytes": 10750
+    },
+    "models/idea-pigeon-flight-approved.glb": {
+      "sha256": "12188f2684fb3475b97b2259328dddc21dbd5741ae8bbb4a172303db7452b5d9",
+      "bytes": 24369444,
+      "input": "public/models/idea-pigeon-flight-approved.glb",
+      "rightsMode": "owner-confirmed-game-release",
+      "provenance": "Exact approved privately reviewed 99 Seoul rig and authored motion"
+    },
+    "models/idea-pigeon-ground.glb": {
+      "sha256": "f597d7e608b33c3443d99dc9ffa39a77f99bb0437e8807171e69990da65c16df",
+      "bytes": 9370812,
+      "input": "public/models/idea-pigeon-ground.glb",
+      "rightsMode": "owner-confirmed-game-release",
+      "provenance": "Exact approved privately reviewed 99 Seoul rig and authored motion"
+    },
+    "pigeon.svg": {
+      "sha256": "e93114d616de25bf490773f6a20ea5da802288c9a7bf6d57c79e6d4e64d0821c",
+      "bytes": 412
+    },
+    "species-audio/assets/cc0-duck-v1/duck.mp3": {
+      "sha256": "599aab0d8a1be1214d2057cce21c03f79c3bc58ec0f106fe40a8d5b97fa32370",
+      "bytes": 148128,
+      "input": "public/species-audio/assets/cc0-duck-v1/duck.mp3",
+      "rightsMode": "cc0",
+      "provenance": "Freesound Duck Quack by gibarroule",
+      "license": "https://freesound.org/people/gibarroule/sounds/365133/"
+    },
+    "species-audio/assets/owner-originals-v1/wing-track-01.wav": {
+      "sha256": "e6cd298bac4e219831cc68121daafc963789271f32715c7f3d2c12c0a2d3ff55",
+      "bytes": 714522,
+      "input": "public/species-audio/assets/owner-originals-v1/wing-track-01.wav",
+      "rightsMode": "owner-confirmed-game-release",
+      "provenance": "Exact packaged owner-supplied game recording"
+    },
+    "species-audio/assets/pixabay-birds-v1/crow.mp3": {
+      "sha256": "9bb50ed0a63ae008281507a6fbfcbf978e865b04c2bfb67cf6bde70bb8ca1a2c",
+      "bytes": 10560,
+      "input": "public/species-audio/assets/pixabay-birds-v1/crow.mp3",
+      "rightsMode": "integrated-game-only",
+      "provenance": "Verified original third-party game audio, sha pinned; not for standalone redistribution from Git or Releases",
+      "license": "https://pixabay.com/service/terms/"
+    },
+    "species-audio/assets/pixabay-birds-v1/eagle-owl.mp3": {
+      "sha256": "3d4b1d5658cc8311cc369331d8c10b5e3031942d6dbc4c45f2ea5ea6abba3cc0",
+      "bytes": 306720,
+      "input": "public/species-audio/assets/pixabay-birds-v1/eagle-owl.mp3",
+      "rightsMode": "integrated-game-only",
+      "provenance": "Verified original third-party game audio, sha pinned; not for standalone redistribution from Git or Releases",
+      "license": "https://pixabay.com/service/terms/"
+    },
+    "species-audio/assets/pixabay-birds-v1/sparrow.mp3": {
+      "sha256": "3bb57496bbaebfc286dc7aa699380a20398b323127c2945b3d4c8d15c6464a74",
+      "bytes": 1243200,
+      "input": "public/species-audio/assets/pixabay-birds-v1/sparrow.mp3",
+      "rightsMode": "integrated-game-only",
+      "provenance": "Verified original third-party game audio, sha pinned; not for standalone redistribution from Git or Releases",
+      "license": "https://pixabay.com/service/terms/"
+    },
+    "species-audio/assets/pixabay-birds-v1/tawny-owl.mp3": {
+      "sha256": "176972660892deb03f3ed1a66d99e94dc61154338c013b9395da3daeef265a62",
+      "bytes": 177120,
+      "input": "public/species-audio/assets/pixabay-birds-v1/tawny-owl.mp3",
+      "rightsMode": "integrated-game-only",
+      "provenance": "Verified original third-party game audio, sha pinned; not for standalone redistribution from Git or Releases",
+      "license": "https://pixabay.com/service/terms/"
+    },
+    "species-audio/assets/pixabay-city-v1/conversation-14573.mp3": {
+      "sha256": "7b038f8a92d3bc46602251785f7dec4e14263990649a2994e031ab125918b750",
+      "bytes": 848640,
+      "input": "public/species-audio/assets/pixabay-city-v1/conversation-14573.mp3",
+      "rightsMode": "integrated-game-only",
+      "provenance": "Verified original third-party game audio, sha pinned; not for standalone redistribution from Git or Releases",
+      "license": "https://pixabay.com/service/terms/"
+    },
+    "species-audio/assets/pixabay-city-v1/engine-82134.mp3": {
+      "sha256": "506c0c9d4c91e2e2977d57a2b9916e8eb084eb816f3ee0a6a2a309a8e36fc54d",
+      "bytes": 140160,
+      "input": "public/species-audio/assets/pixabay-city-v1/engine-82134.mp3",
+      "rightsMode": "integrated-game-only",
+      "provenance": "Verified original third-party game audio, sha pinned; not for standalone redistribution from Git or Releases",
+      "license": "https://pixabay.com/service/terms/"
+    },
+    "species-audio/assets/pixabay-city-v1/wind-316392.mp3": {
+      "sha256": "b9440cb77eb4c3ad8755f9db4bbb5b5cf0054178b7b719f798d108a00c351e08",
+      "bytes": 482324,
+      "input": "public/species-audio/assets/pixabay-city-v1/wind-316392.mp3",
+      "rightsMode": "integrated-game-only",
+      "provenance": "Verified original third-party game audio, sha pinned; not for standalone redistribution from Git or Releases",
+      "license": "https://pixabay.com/service/terms/"
+    },
+    "species-audio/assets/pixabay-human-v1/female-startle-251067.mp3": {
+      "sha256": "4a04e0df062f4457fcbca40f134a8c4c59aab38ef5033c2c4371ada3c772f64f",
+      "bytes": 56064,
+      "input": "public/species-audio/assets/pixabay-human-v1/female-startle-251067.mp3",
+      "rightsMode": "integrated-game-only",
+      "provenance": "Verified original third-party game audio, sha pinned; not for standalone redistribution from Git or Releases",
+      "license": "https://pixabay.com/service/terms/"
+    },
+    "species-audio/assets/pixabay-human-v1/source.json": {
+      "sha256": "e80c6e341fc690fa25944102d15ad32578e806997263fea3b38fb8eb3a49bd6c",
+      "bytes": 940
+    },
+    "species-audio/assets/pixabay-water-v1/splash-79923.mp3": {
+      "sha256": "802ad251e9fd9cebceadcb970d27567e73a93e083bc6c0bd31399f94d904e2aa",
+      "bytes": 34080,
+      "input": "public/species-audio/assets/pixabay-water-v1/splash-79923.mp3",
+      "rightsMode": "integrated-game-only",
+      "provenance": "Verified original third-party game audio, sha pinned; not for standalone redistribution from Git or Releases",
+      "license": "https://pixabay.com/service/terms/"
+    },
+    "species-audio/assets/user-shortcalls-v1/pigeon-01.wav": {
+      "sha256": "c3fa7d0324e35d98577946891c2b1609b6ed28c8fa5a6761ef5201d528ad76c2",
+      "bytes": 317622,
+      "input": "public/species-audio/assets/user-shortcalls-v1/pigeon-01.wav",
+      "rightsMode": "owner-confirmed-game-release",
+      "provenance": "Exact packaged owner-supplied game recording"
+    },
+    "species-audio/assets/user-shortcalls-v1/pigeon-02.wav": {
+      "sha256": "ca272dfd5c143b811aa6681d173314f7332b053f831e55270e9f9d9df026819a",
+      "bytes": 317622,
+      "input": "public/species-audio/assets/user-shortcalls-v1/pigeon-02.wav",
+      "rightsMode": "owner-confirmed-game-release",
+      "provenance": "Exact packaged owner-supplied game recording"
+    },
+    "species-audio/assets/user-shortcalls-v1/pigeon-03.wav": {
+      "sha256": "eb52e3ef09da644f2ca680eee81a73026c2dbdf3c7b05b6160a8e81c63497ab6",
+      "bytes": 330852,
+      "input": "public/species-audio/assets/user-shortcalls-v1/pigeon-03.wav",
+      "rightsMode": "owner-confirmed-game-release",
+      "provenance": "Exact packaged owner-supplied game recording"
+    },
+    "species-audio/assets/user-shortcalls-v1/pigeon-04.wav": {
+      "sha256": "d764dab816327bd8facdaee1e650387c07aee6fcd80519566c77ccde5827934c",
+      "bytes": 330852,
+      "input": "public/species-audio/assets/user-shortcalls-v1/pigeon-04.wav",
+      "rightsMode": "owner-confirmed-game-release",
+      "provenance": "Exact packaged owner-supplied game recording"
+    },
+    "species-audio/assets/user-shortcalls-v1/pigeon-05.wav": {
+      "sha256": "9f9328fed1ef61d6c7f597d98b266e14629903c68a5bfe9a1111014deb2d7608",
+      "bytes": 344082,
+      "input": "public/species-audio/assets/user-shortcalls-v1/pigeon-05.wav",
+      "rightsMode": "owner-confirmed-game-release",
+      "provenance": "Exact packaged owner-supplied game recording"
+    },
+    "species-audio/assets/user-wings-v2/bird-wings-598020.mp3": {
+      "sha256": "300be343203f270a5f2e12e6e4670694944f01c660cd645228bcd5a1f59531e7",
+      "bytes": 158208,
+      "input": "public/species-audio/assets/user-wings-v2/bird-wings-598020.mp3",
+      "rightsMode": "owner-confirmed-game-release",
+      "provenance": "Exact packaged owner-supplied game recording"
+    }
+  }
+}

@@ -1,0 +1,113 @@
+name: Deploy Gugu Seoul Build 7 to GitHub Pages
+
+on:
+  push:
+    branches: [main, release/build6-pages-review]
+    paths:
+      - '.github/workflows/pages-build7.yml'
+      - 'release/build7-manifest.json'
+      - 'tools/prepare-pages-build7-intake.py'
+      - 'tools/verify-pages-release.py'
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish verified output from main to the existing Pages environment
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: github-pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: github.repository == 'samie1634/gugu-seoul' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/release/build6-pages-review') && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    environment: gugu-pages-draft-intake
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the approved version
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24.22.3'
+      - name: Install pnpm
+        run: npm install --global pnpm@11.25.0
+      - name: Install locked dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Verify public source files without binary exceptions
+        run: pnpm audit:public
+      - name: Verify the operator-approved private intake repository
+        env:
+          INTAKE_COMMIT: ${{ secrets.GUGU_PRIVATE_INTAKE_BUILD7_COMMIT }}
+          INTAKE_TOKEN: ${{ secrets.GUGU_PRIVATE_INTAKE_READ_TOKEN }}
+        run: python3 tools/prepare-pages-build7-intake.py verify-private
+      - name: Check out the pinned intake commit with only repository-specific read access
+        uses: actions/checkout@v4
+        with:
+          repository: samie1634/gugu-pages-intake
+          ref: ${{ secrets.GUGU_PRIVATE_INTAKE_BUILD7_COMMIT }}
+          token: ${{ secrets.GUGU_PRIVATE_INTAKE_READ_TOKEN }}
+          path: .cache/private-package-intake-build7
+          fetch-depth: 1
+          persist-credentials: false
+          lfs: false
+          submodules: false
+      - name: Verify the retained and new Git blobs; reconstruct only the approved Build 7 ZIP
+        env:
+          INTAKE_COMMIT: ${{ secrets.GUGU_PRIVATE_INTAKE_BUILD7_COMMIT }}
+        run: python3 tools/prepare-pages-build7-intake.py assemble
+      - name: Verify archive, rights scope and binary paths and hydrate only runtime inputs
+        run: python3 tools/verify-pages-release.py --manifest build7 hydrate "$RUNNER_TEMP/gugu-build7-runtime.zip"
+      - name: Type check
+        run: pnpm typecheck
+      - name: Lint
+        run: pnpm lint
+      - name: Test
+        run: pnpm test
+      - name: Build
+        run: pnpm build
+      - name: Verify the fresh build byte for byte against the accepted game
+        run: python3 tools/verify-pages-release.py --manifest build7 dist dist
+      - name: Require a passing non-deploying review of this exact commit
+        if: github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' && inputs.publish
+        env:
+          PREFLIGHT_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]
+          curl -fsS --proto '=https' --max-time 40 -H "Authorization: Bearer $PREFLIGHT_TOKEN" \
+            -H 'Accept: application/vnd.github+json' \
+            "https://api.github.com/repos/samie1634/gugu-seoul/actions/runs?branch=release%2Fbuild6-pages-review&event=push&head_sha=$GITHUB_SHA" |
+              jq -e --arg sha "$GITHUB_SHA" 'any(.workflow_runs[]?;
+                .head_sha == $sha and .head_branch == "release/build6-pages-review" and
+                .path == ".github/workflows/pages-build7.yml" and .event == "push" and
+                .status == "completed" and .conclusion == "success")' > /dev/null
+      - name: Upload verified Pages artifact
+        if: github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' && inputs.publish
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    if: github.repository == 'samie1634/gugu-seoul' && github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' && inputs.publish
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

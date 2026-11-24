@@ -11,6 +11,9 @@ export const PIGEON_REST = 'GroundRest';
 export const PIGEON_ASSET_HEIGHT = .750905672;
 export const PIGEON_CYCLE_DISTANCE = .426;
 export const PIGEON_AUTO_PECK_DELAY = 3.2;
+const FLOOR_INPUT_SETTLE_SECONDS = .75;
+const OPPONENT_JAB_SECONDS = .36;
+const MODEL_UP = new THREE.Vector3(0, 1, 0);
 
 const mod1 = (n: number) => ((n % 1) + 1) % 1;
 
@@ -76,17 +79,28 @@ export function createGroundPigeon(parent: THREE.Scene, baseUrl: string,
   let mixer: THREE.AnimationMixer | undefined;
   let head: THREE.Object3D | undefined;
   const restForward = new THREE.Vector3();
-  const baseHeadPosition = new THREE.Vector3();
   const offsetPoint = new THREE.Vector3();
-  let headDisplaced = false;
+  const worldAxis = new THREE.Vector3();
+  const rootWorld = new THREE.Quaternion(), parentWorld = new THREE.Quaternion(), pitch = new THREE.Quaternion();
+  const neck: THREE.Object3D[] = [];
+  const overrides: { node: THREE.Object3D; position: THREE.Vector3; quaternion: THREE.Quaternion }[] = [];
   const resetHead = () => {
-    if (headDisplaced && head) head.position.copy(baseHeadPosition);
-    headDisplaced = false;
+    for (const { node, position, quaternion } of overrides) {
+      node.position.copy(position); node.quaternion.copy(quaternion);
+    }
+    overrides.length = 0;
+  };
+  const displace = (node: THREE.Object3D, forward: number) => {
+    if (!node.parent) return;
+    overrides.push({ node, position: node.position.clone(), quaternion: node.quaternion.clone() });
+    node.getWorldPosition(offsetPoint);
+    root.worldToLocal(offsetPoint).addScaledVector(restForward, forward);
+    node.position.copy(node.parent.worldToLocal(root.localToWorld(offsetPoint)));
   };
   let clips: Partial<Record<'walk'|'peck'|'rest', THREE.AnimationAction>> = {};
   let selected: THREE.AnimationAction | undefined;
   let loadState: 'idle'|'loading'|'ready'|'fallback' = 'idle';
-  let seenManualPeck = -1, manualAge = -1, queuedManual = false;
+  let seenManualPeck = -1, manualAge = -1, queuedManual = false, queuedWhileWalking = 0;
   let state = { phase: 0, peckAge: -1, manualAge: -1, clip: null as string|null };
   const startLoading = () => {
     loadState = 'loading';
@@ -108,7 +122,13 @@ export function createGroundPigeon(parent: THREE.Scene, baseUrl: string,
         restForward.subVectors(root.worldToLocal(candidateHead.getWorldPosition(new THREE.Vector3())),
           root.worldToLocal(tail.getWorldPosition(new THREE.Vector3())));
         restForward.y = 0;
-        if (restForward.lengthSq() > 1e-6) { restForward.normalize(); head = candidateHead; }
+        if (restForward.lengthSq() > 1e-6) {
+          restForward.normalize(); head = candidateHead;
+          for (const name of ['NeckMid', 'NeckUpper']) {
+            const bone = scene.getObjectByName(name);
+            if (bone instanceof THREE.Bone) neck.push(bone);
+          }
+        }
       }
       mixer = new THREE.AnimationMixer(scene);
       clips = { walk: mixer.clipAction(walk), peck: mixer.clipAction(peck), rest: mixer.clipAction(rest) };
@@ -119,66 +139,96 @@ export function createGroundPigeon(parent: THREE.Scene, baseUrl: string,
   return {
     root,
     get ready() { return loadState === 'ready'; },
+    get floorBusy() { return queuedManual || manualAge >= 0 || state.peckAge >= 0; },
     snapshot() { return { loadState, visible: root.visible, queuedManual, ...state }; },
     reset() {
       resetHead(); timing.reset(); selected?.stop(); selected = undefined;
-      manualAge = -1; queuedManual = false; seenManualPeck = -1; root.visible = false;
+      manualAge = -1; queuedManual = false; queuedWhileWalking = 0; seenManualPeck = -1; root.visible = false;
       state = { phase: 0, peckAge: -1, manualAge: -1, clip: null };
     },
     update(bird: GroundState, c: GroundContext): boolean {
       resetHead();
-      const eligible = c.look === 'pigeon' && !c.reducedMotion && !c.firstPerson;
+      const eligible = c.look === 'pigeon' && !c.firstPerson;
       // Begin during the intro without exposing the actor or starting idle time.
       if (eligible && loadState === 'idle') startLoading();
       const groundMode = bird.mode === 'rest' || bird.mode === 'walk';
       const grounded = c.started && eligible && bird.grounded && bird.support?.walkable === true && groundMode;
+      // Native motion authors an immersed rest pose only after swept water
+      // contact; it is not grounded and must not start floor or combat actions.
+      const floating = c.started && eligible && !bird.grounded && bird.mode === 'rest';
       const walking = bird.mode === 'walk';
       const beyondWalk = walking && Math.hypot(bird.vx, bird.vz) > PIGEON_HOLD_WALK_MAX;
       const manual = c.manualPeckAge >= 0 && c.manualPeckAge < .5;
       const dt = Number.isFinite(c.committedSeconds) ? Math.max(0, Math.min(.1, c.committedSeconds)) : 0;
-      const canQueue = grounded && !walking && loadState !== 'fallback';
+      const canQueue = grounded && !c.reducedMotion && loadState !== 'fallback';
       if (dt > 0 && c.manualPeckSerial !== undefined && c.manualPeckSerial !== seenManualPeck) {
         seenManualPeck = c.manualPeckSerial;
         // Replace the waiting visual with the latest accepted input. The native
         // gameplay peck has already been accepted and is never replayed here.
         queuedManual = canQueue && manual && c.manualPeckKind === 'ground';
+        queuedWhileWalking = 0;
         manualAge = -1;
       }
       if (!canQueue) { queuedManual = false; manualAge = -1; }
-      const playQueued = dt > 0 && queuedManual && loadState === 'ready' && !c.landedRecently;
+      if (walking) {
+        if (queuedManual) {
+          queuedWhileWalking += dt;
+          if (queuedWhileWalking > FLOOR_INPUT_SETTLE_SECONDS) queuedManual = false;
+        }
+        manualAge = -1;
+      }
+      const playQueued = dt > 0 && queuedManual && !walking && loadState === 'ready' && !c.landedRecently;
       const peckDuration = clips.peck?.getClip().duration ?? 0;
+      const floorDuration = peckDuration > 0 ? peckDuration + PIGEON_AUTO_PECK_EXTENSION : 0;
       if (playQueued) { queuedManual = false; manualAge = 0; }
       else if (manualAge >= 0) {
         manualAge += dt;
         if (manualAge >= peckDuration) manualAge = -1;
       }
-      const coo = !walking && !manual && !queuedManual && manualAge < 0 && head && c.cooMotion;
-      const poseOverride = (!coo && c.cooMotion === undefined && c.cooAge <= 1.05) || c.flirtAge < FLIRT_SECONDS || c.landedRecently;
-      // An opponent jab keeps the native aim/camera branch. A floor tap plays
-      // the authored 3-target motion once, while existing food logic gets one hit.
-      const originalPose = manualAge < 0 && (poseOverride || manual);
+      const coo = !c.reducedMotion && !floating && head && c.cooMotion;
+      const jabAge = c.manualPeckAge;
+      const jab = grounded && !c.reducedMotion && c.manualPeckKind === 'opponent' &&
+        jabAge >= 0 && jabAge < OPPONENT_JAB_SECONDS ? Math.sin(Math.PI * jabAge / OPPONENT_JAB_SECONDS) ** 2 : 0;
       const scale = bird.body.heightM / PIGEON_ASSET_HEIGHT;
+      // A call defers a new idle floor sequence but never tears down one already
+      // playing. Manual ground action remains immediate once the bird settles.
+      const busyWithOtherAction = c.flirtAge < FLIRT_SECONDS || c.landedRecently;
       const t = timing.update(dt, c.distance, grounded && loadState === 'ready', walking, PIGEON_CYCLE_DISTANCE * scale,
-        !originalPose && !coo, manual || queuedManual || manualAge >= 0, peckDuration > 0 ? peckDuration + PIGEON_AUTO_PECK_EXTENSION : 0);
+        !c.reducedMotion && !busyWithOtherAction && (!coo || state.peckAge >= 0),
+        manual || queuedManual || manualAge >= 0, floorDuration);
       state = { ...t, manualAge, clip: null };
-      root.visible = loadState === 'ready' && grounded && !originalPose && !beyondWalk;
+      // Do not swap in an old gray model for an input, accessibility mode, fast
+      // walk or landing frame. Native gameplay still owns collisions and attacks.
+      root.visible = loadState === 'ready' && (grounded || floating);
       if (!root.visible || !mixer) return false;
       root.position.set(bird.x, bird.y - bird.body.centreToSoleM, bird.z);
       root.rotation.y = Math.PI - bird.heading;
       root.scale.setScalar(scale);
-      const next = walking ? clips.walk : manualAge >= 0 || t.peckAge >= 0 ? clips.peck : clips.rest;
+      const walkVisual = walking && !c.reducedMotion && !beyondWalk;
+      const floorAge = manualAge >= 0 ? manualAge : t.peckAge;
+      const next = walkVisual ? clips.walk : floorAge >= 0 && !c.reducedMotion ? clips.peck : clips.rest;
       if (next !== selected) { selected?.stop(); selected = next; next?.reset().play(); }
       if (next) {
         const duration = next.getClip().duration;
-        next.time = walking ? duration * t.phase : manualAge >= 0 ? manualAge : t.peckAge >= 0 ? Math.min(duration - .000001, pigeonAutoPeckClipAge(t.peckAge, duration)) : 0;
+        next.time = walkVisual ? duration * t.phase : next === clips.peck
+          ? Math.min(duration - .000001, manualAge >= 0 ? floorAge : pigeonAutoPeckClipAge(floorAge, duration)) : 0;
         mixer.update(0);
       }
-      if (coo && head?.parent && next === clips.rest && coo.forward > 0) {
-        baseHeadPosition.copy(head.position);
-        head.getWorldPosition(offsetPoint);
-        root.worldToLocal(offsetPoint).addScaledVector(restForward, coo.forward);
-        head.position.copy(head.parent.worldToLocal(root.localToWorld(offsetPoint)));
-        headDisplaced = true;
+      if (head?.parent && next !== clips.peck) {
+        if (jab > 0) {
+          // Same native pulse, reach (24% of height) and downward bill angle.
+          // Split extension across the skinned neck to keep the collar/socket
+          // attached; the anchor, torso and feet keep their current pose.
+          const reach = PIGEON_ASSET_HEIGHT * .24 * jab;
+          for (const bone of neck) displace(bone, reach * .28);
+          displace(head, reach * (1 - .28 * neck.length));
+          root.getWorldQuaternion(rootWorld);
+          head.parent.getWorldQuaternion(parentWorld).invert();
+          worldAxis.crossVectors(MODEL_UP, restForward).normalize().applyQuaternion(rootWorld).applyQuaternion(parentWorld);
+          head.quaternion.premultiply(pitch.setFromAxisAngle(worldAxis, .18 * jab));
+        } else if (coo && coo.forward > 0) {
+          displace(head, coo.forward);
+        }
       }
       state.clip = next?.getClip().name ?? null;
       return true;

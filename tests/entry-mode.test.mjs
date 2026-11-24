@@ -8,7 +8,7 @@ test('default and existing QA URLs enter the integrated scene', () => {
   }
 });
 
-test('legacy mode is available only when explicitly requested', () => {
-  assert.equal(useIntegratedScene(new URLSearchParams('?native=legacy')), false);
+test('old legacy selectors no longer activate the retired local model', () => {
+  assert.equal(useIntegratedScene(new URLSearchParams('?native=legacy')), true);
   assert.equal(useIntegratedScene(new URLSearchParams('?other=legacy')), true);
 });

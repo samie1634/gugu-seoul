@@ -7,8 +7,6 @@ import stat
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
-PIN = json.loads((ROOT / "release/build6-manifest.json").read_text())
-FILES = PIN["files"]
 
 def check(condition, reason):
     if not condition:
@@ -53,7 +51,10 @@ def built(directory):
 cli = argparse.ArgumentParser()
 cli.add_argument("step", choices=("verify","hydrate","dist"))
 cli.add_argument("path", type=Path)
+cli.add_argument("--manifest", choices=("build6", "build7"), default="build6")
 opts = cli.parse_args()
+PIN = json.loads((ROOT / "release" / (opts.manifest + "-manifest.json")).read_text())
+FILES = PIN["files"]
 if opts.step == "dist":
     built(opts.path)
 else:
